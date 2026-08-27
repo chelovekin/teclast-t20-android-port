@@ -10,6 +10,7 @@ on:
       - 'scripts/fix_final_link_compat.py'
       - 'scripts/fix_s5k3l9_pdaf.py'
       - 'scripts/prepare_source.py'
+      - 'scripts/integrate_stock_kernel_parity.py'
       - 'scripts/reconstruct_stock_config.sh'
       - 'stock/**'
 
@@ -35,7 +36,7 @@ jobs:
             libncurses-dev python3 perl ca-certificates zip device-tree-compiler \
             binutils file
 
-      - name: Select factory compiler
+      - name: Select factory compiler and parity integration
         shell: bash
         run: |
           # Factory boot reports: gcc version 6.3.1 20170109
@@ -58,6 +59,17 @@ jobs:
               if s.count(old) != 1:
                   raise SystemExit(f'expected one occurrence: {old}')
               s = s.replace(old, new, 1)
+
+          # Keep the archived factory config untouched, but reproduce the
+          # actual March-2019 binary composition: Goodix REE + LN4913, no FPC.
+          needle = '  --camera-donor "$WORK/camera-donor"\n'
+          if s.count(needle) != 1:
+              raise SystemExit('could not locate prepare_source completion')
+          s = s.replace(
+              needle,
+              needle + '\npython3 "$ROOT/scripts/integrate_stock_kernel_parity.py" --kernel "$KERNEL"\n',
+              1,
+          )
           p.write_text(s)
           PY
 
@@ -71,18 +83,16 @@ jobs:
           rc=$?
           set -e
 
-          if [[ $rc -eq 0 ]]; then
-            exit 0
-          fi
-
-          # The legacy script searches the gzip-compressed Image.gz-dtb with
-          # strings(1). Recover only that post-build false negative, and
-          # independently verify the uncompressed vmlinux.
           KOUT="$RUNNER_TEMP/t20-kernel-baseline/kout"
           VMLINUX="$KOUT/vmlinux"
           ODMDTBO="$KOUT/arch/arm64/boot/dts/odmdtbo.img"
 
-          test "$rc" -eq 1
+          # The legacy script may return 1 only because it searches a gzip
+          # stream with strings(1). In either case, validate the uncompressed
+          # linked image independently before accepting the build.
+          if [[ $rc -ne 0 ]]; then
+            test "$rc" -eq 1
+          fi
           test -s "$VMLINUX"
           test -s "$ODMDTBO"
           test -s out/Image.gz-dtb
@@ -92,14 +102,31 @@ jobs:
           grep -aFq 'lq101r1sx01a_wqxga_dsi_vdo' "$VMLINUX"
           grep -aFq 'bq24296' "$VMLINUX"
 
+          # Exact March-2019 factory-binary parity gates. These source paths and
+          # ABI strings are present in the stock Image and absent from run #36.
+          grep -aFq 'drivers/input/fingerprint/goodix_ree/gf_common.c' "$VMLINUX"
+          grep -aFq 'goodix,fingerprint' "$VMLINUX"
+          grep -aFq 'mediatek,goodix-fp' "$VMLINUX"
+          grep -aFq 'Finger Print: Have not used Goodix, return' "$VMLINUX"
+          grep -aFq 'drivers/misc/mediatek/sensors-1.0/hall/ln4913/ln4913.c' "$VMLINUX"
+          grep -aFq 'mediatek,hall-gpio-int' "$VMLINUX"
+          grep -aFq 'ln4913_Driver' "$VMLINUX"
+          if grep -aFq 'drivers/input/fingerprint/fpc/fpc1020_main.c' "$VMLINUX"; then
+            echo 'ERROR: FPC implementation is linked but absent from exact March stock kernel'
+            exit 21
+          fi
+
           nm "$VMLINUX" > "$RUNNER_TEMP/t20-vmlinux.nm"
           grep -Eq '[[:space:]][Tt][[:space:]]+battery_disable_batfet$' "$RUNNER_TEMP/t20-vmlinux.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+gf_probe$' "$RUNNER_TEMP/t20-vmlinux.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+ln4913_probe$' "$RUNNER_TEMP/t20-vmlinux.nm"
+          grep -E '([[:space:]]gf_|[[:space:]]ln4913_)' "$RUNNER_TEMP/t20-vmlinux.nm" > out/hardware-symbols.txt
           rm -f "$RUNNER_TEMP/t20-vmlinux.nm"
 
           cp "$ODMDTBO" out/odmdtbo.img
           sha256sum out/Image.gz-dtb out/Image.gz out/mt6797.dtb out/odmdtbo.img > out/SHA256SUMS
           sed -i 's/^result=.*/result=PASS/; s/^exit_code=.*/exit_code=0/' out/BUILD_STATUS.txt
-          echo 'BASELINE BUILD PASS (validated from vmlinux; legacy compressed-image postcheck bypassed)'
+          echo 'BASELINE BUILD PASS (factory compiler + stock hardware parity gates)'
 
       - name: Upload build diagnostics and images
         if: always()
