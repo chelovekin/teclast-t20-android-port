@@ -42,13 +42,15 @@ def make_stock_boot() -> tuple[bytes, bytes, bytes, bytes]:
     struct.pack_into("<I", header, 36, PAGE)
     struct.pack_into("<I", header, 40, 0)
     struct.pack_into("<I", header, 44, 0)
-    header[48:58] = b"T20-stock\0"
-    header[64:95] = b"console=tty0 androidboot.test=1\0"
+    name = b"T20-stock\0"
+    cmdline = b"console=tty0 androidboot.test=1\0"
+    header[48:48 + len(name)] = name
+    header[64:64 + len(cmdline)] = cmdline
+    assert len(header) == PAGE
 
     image = bytearray(header)
     image += stock_kernel
     image += b"\0" * (align_up(len(image), PAGE) - len(image))
-    ramdisk_off = len(image)
     image += ramdisk
     image += b"\0" * (align_up(len(image), PAGE) - len(image))
     image += second
