@@ -46,7 +46,7 @@ static int pin_ctrl_probe(struct platform_device *pdev)
 	ret = gpio_request(gpio_spk_en, "gpio_spk_en");
 	pr_notice("gezi [FAN] gpio request gpio_spk_en = 0x%x fail with %d\n",
 		  gpio_spk_en, ret);
-	driver_create_file(&pin_ctrl_driver.driver, &driver_attr_pin_ctrl);
+	ret = driver_create_file(&pin_ctrl_driver.driver, &driver_attr_pin_ctrl);
 	pr_notice("gezi %s------------------ok!\n", __func__);
 	return 0;
 }
