@@ -8,6 +8,8 @@ on:
       - 'scripts/test_repack_stock_boot.py'
       - 'scripts/strip_legacy_boot_signature.py'
       - 'scripts/test_strip_legacy_boot_signature.py'
+      - 'scripts/compose_kernel_with_stock_dtb.py'
+      - 'scripts/test_compose_kernel_with_stock_dtb.py'
       - '.github/workflows/repack-selftest.yml'
       - '.github/workflows/boot-repack.yml'
   pull_request:
@@ -16,6 +18,8 @@ on:
       - 'scripts/test_repack_stock_boot.py'
       - 'scripts/strip_legacy_boot_signature.py'
       - 'scripts/test_strip_legacy_boot_signature.py'
+      - 'scripts/compose_kernel_with_stock_dtb.py'
+      - 'scripts/test_compose_kernel_with_stock_dtb.py'
       - '.github/workflows/repack-selftest.yml'
       - '.github/workflows/boot-repack.yml'
   workflow_dispatch:
@@ -36,6 +40,7 @@ jobs:
         run: |
           python3 scripts/test_repack_stock_boot.py
           python3 scripts/test_strip_legacy_boot_signature.py
+          python3 scripts/test_compose_kernel_with_stock_dtb.py
 
       - name: Verify baseline artifact lookup and download
         shell: bash
@@ -60,6 +65,6 @@ jobs:
           mkdir -p baseline-smoke
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > baseline-smoke.zip
           unzip -q baseline-smoke.zip -d baseline-smoke
-          test -s baseline-smoke/Image.gz-dtb
-          file baseline-smoke/Image.gz-dtb
-          sha256sum baseline-smoke/Image.gz-dtb
+          test -s baseline-smoke/Image.gz
+          file baseline-smoke/Image.gz
+          sha256sum baseline-smoke/Image.gz
