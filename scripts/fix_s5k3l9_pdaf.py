@@ -13,21 +13,22 @@ call = "S5K3L9_Read_PDAF_Otp(ui4_length, pinputdata);"
 
 if call not in s:
     pattern = re.compile(
-        r"(?P<indent>^[ \t]*)else[ \t]+if[ \t]*\([ \t]*ui4_length[ \t]*==[ \t]*"
+        r"^(?P<line_indent>[ \t]*)else[ \t]+if[ \t]*\([ \t]*ui4_length[ \t]*==[ \t]*"
         r"S5K3L9_LSC_OTP_SIZE[ \t]*\)[ \t]*\r?\n"
-        r"(?P=indent)\{",
+        r"(?P<brace_indent>[ \t]*)\{",
         re.MULTILINE,
     )
 
     def repl(m: re.Match) -> str:
-        indent = m.group("indent")
+        li = m.group("line_indent")
+        bi = m.group("brace_indent")
         return (
-            f"{indent}else if(ui4_length == S5K3L9_PDAF_OTP_SIZE)\n"
-            f"{indent}{{\n"
-            f"{indent}\t{call}\n"
-            f"{indent}}}\n"
-            f"{indent}else if(ui4_length == S5K3L9_LSC_OTP_SIZE)\n"
-            f"{indent}{{"
+            f"{li}else if(ui4_length == S5K3L9_PDAF_OTP_SIZE)\n"
+            f"{bi}{{\n"
+            f"{bi}\t{call}\n"
+            f"{bi}}}\n"
+            f"{li}else if(ui4_length == S5K3L9_LSC_OTP_SIZE)\n"
+            f"{bi}{{"
         )
 
     s, count = pattern.subn(repl, s, count=1)
