@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import re
 import shutil
 from pathlib import Path
 
@@ -51,18 +52,22 @@ def main() -> None:
     # The donor GSLX680 comes from an MTK tree with CONFIG_MTK_I2C_EXTENSION,
     # where struct i2c_msg has a vendor-only `timing` member. MT6797 uses the
     # arbitration I2C path and does not enable that extension. Remove every
-    # donor-only per-message timing assignment; standard i2c_transfer remains.
+    # xfer_msg[].timing assignment, including copies inside disabled legacy
+    # code, while leaving the actual i2c_transfer() calls untouched.
     gsl = k / "drivers/input/touchscreen/mediatek/GSlX680/mtk_gslX680.c"
     gsl_text = gsl.read_text()
-    needle = "xfer_msg[0].timing = 400;"
-    count = gsl_text.count(needle)
+    gsl_text, count = re.subn(
+        r"^[ \t]*xfer_msg\[\d+\]\.timing\s*=\s*[^;]+;[ \t]*\r?\n?",
+        "",
+        gsl_text,
+        flags=re.MULTILINE,
+    )
     if count == 0:
-        raise RuntimeError("expected GSLX680 donor timing assignment not found")
-    gsl_text = gsl_text.replace(needle, "")
-    if ".timing" in gsl_text:
-        raise RuntimeError("unsupported GSLX680 i2c_msg timing field remains")
+        raise RuntimeError("expected GSLX680 donor i2c_msg timing assignments not found")
+    if re.search(r"\bxfer_msg\[\d+\]\.timing\b", gsl_text):
+        raise RuntimeError("unsupported GSLX680 i2c_msg timing assignment remains")
     gsl.write_text(gsl_text)
-    print(f"GSLX680 MT6797 I2C adaptation: removed {count} timing assignment(s)")
+    print(f"GSLX680 MT6797 I2C adaptation: removed {count} timing assignment(s)", flush=True)
 
     # The donor GSL Makefile contains project-specific ARM paths and debug
     # warnings. Keep only the architecture-neutral rules, including its
