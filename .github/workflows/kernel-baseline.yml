@@ -12,7 +12,7 @@ on:
       - 'scripts/prepare_source.py'
       - 'scripts/integrate_stock_kernel_parity.py'
       - 'scripts/integrate_final_factory_parity.py'
-      - 'scripts/instrument_run47_vcorefs.py'
+      - 'scripts/instrument_run49_spm_bypass.py'
       - 'scripts/reconstruct_stock_config.sh'
       - 'stock/**'
 
@@ -74,7 +74,7 @@ jobs:
               "sed -i 's#obj-$(CONFIG_CUSTOM_KERNEL_HALL) += hall/#obj-y += hall/#' "
               '"$KERNEL/drivers/misc/mediatek/sensors-1.0/Makefile"\n'
               'python3 "$ROOT/scripts/integrate_final_factory_parity.py" --kernel "$KERNEL"\n'
-              'python3 "$ROOT/scripts/instrument_run47_vcorefs.py" --kernel "$KERNEL"\n'
+              'python3 "$ROOT/scripts/instrument_run49_spm_bypass.py" --kernel "$KERNEL"\n'
           )
           s = s.replace(needle, needle + parity, 1)
           p.write_text(s)
@@ -84,7 +84,7 @@ jobs:
         shell: bash
         env:
           KBUILD_BUILD_TIMESTAMP: 'Tue Mar 12 12:31:29 CST 2019'
-          LOCALVERSION: '-t20run47'
+          LOCALVERSION: '-t20run49'
         run: |
           set +e
           bash scripts/build_baseline.sh
@@ -110,9 +110,10 @@ jobs:
           grep -aFq 'lq101r1sx01a_wqxga_dsi_vdo' "$VMLINUX"
           grep -aFq 'bq24296' "$VMLINUX"
           grep -aFq 'mediatek,sw_charger' "$VMLINUX"
-          grep -aFq 'T20RUN47 A enter is_vcorefs_feature_enable' "$VMLINUX"
-          grep -aFq 'T20RUN47 S after vcorefs_drv_init' "$VMLINUX"
-          grep -aFq '3.18.79-t20run47' "$VMLINUX"
+          grep -aFq 'T20RUN49 A after_fw_log i=%d' "$VMLINUX"
+          grep -aFq 'T20RUN49 F dyna_load_pcm_done=1' "$VMLINUX"
+          grep -aFq 'T20RUN49 E count_match bypass_vcorefs_late_init' "$VMLINUX"
+          grep -aFq '3.18.79-t20run49' "$VMLINUX"
           if grep -aFq 'ti,bq24296' "$VMLINUX"; then
             echo 'ERROR: non-stock BQ24296 OF compatible survived adaptation'
             exit 22
@@ -149,7 +150,7 @@ jobs:
           cp "$ODMDTBO" out/odmdtbo.img
           sha256sum out/Image.gz-dtb out/Image.gz out/mt6797.dtb out/odmdtbo.img > out/SHA256SUMS
           sed -i 's/^result=.*/result=PASS/; s/^exit_code=.*/exit_code=0/' out/BUILD_STATUS.txt
-          echo 'RUN47 BUILD PASS (factory compiler + stock parity + VcoreFS markers)'
+          echo 'RUN49 BUILD PASS (factory compiler + stock parity + persistent SPM markers + VcoreFS late-init bypass)'
 
       - name: Upload build diagnostics and images
         if: always()
