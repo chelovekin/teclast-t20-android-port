@@ -1,0 +1,28 @@
+name: T20 boot repacker self-test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/repack_stock_boot.py'
+      - 'scripts/test_repack_stock_boot.py'
+      - '.github/workflows/repack-selftest.yml'
+  pull_request:
+    paths:
+      - 'scripts/repack_stock_boot.py'
+      - 'scripts/test_repack_stock_boot.py'
+      - '.github/workflows/repack-selftest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout port project
+        uses: actions/checkout@v4
+      - name: Run boot repacker regression tests
+        run: python3 scripts/test_repack_stock_boot.py
