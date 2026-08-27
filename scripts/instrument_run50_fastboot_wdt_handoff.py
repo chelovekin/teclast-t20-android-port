@@ -30,11 +30,13 @@ extern void mtk_wdt_restart(enum wd_restart_type type);
 static inline void t20_run50_wdt_kick(const char *tag, int idx)
 {
 	mtk_wdt_restart(WD_TYPE_NOLOCK);
-	aee_sram_printk("T20RUN50 %s i=%d\n", tag, idx);
+	aee_sram_printk("T20RUN50 %s i=%d\\n", tag, idx);
 }
 #else
 static inline void t20_run50_wdt_kick(const char *tag, int idx)
 {
+	(void)tag;
+	(void)idx;
 }
 #endif'''
     s = replace_once(s, include_pat, include_repl, "wdt helper insertion")
