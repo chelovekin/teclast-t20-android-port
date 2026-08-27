@@ -10,6 +10,8 @@ BASE_REPO="https://github.com/dguidipc/gemini-android-kernel-3.18-android8.git"
 BASE_COMMIT="1a0acd5b806d370097fa0ce46fef0680ba27e4b7"
 DONOR_REPO="https://github.com/Goayandi/android_kernel_mt8176_common.git"
 DONOR_COMMIT="3979f3de3ac2308dbf455117aa5eaf23f28edc55"
+CAMERA_REPO="https://github.com/WisniaPL/LeEco-Le1S-Kernel.git"
+CAMERA_COMMIT="e03ab790982ed578e565ea43e07079108e13eeea"
 TOOLCHAIN_REPO="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
 TOOLCHAIN_COMMIT="7280ce2399316a5dbd8872e0bfe69435d8719230"
 
@@ -24,6 +26,7 @@ finish() {
     echo "exit_code=$rc"
     echo "base_commit=$BASE_COMMIT"
     echo "donor_commit=$DONOR_COMMIT"
+    echo "camera_donor_commit=$CAMERA_COMMIT"
     echo "toolchain_commit=$TOOLCHAIN_COMMIT"
   } > "$OUT/BUILD_STATUS.txt"
 }
@@ -41,6 +44,7 @@ clone_at() {
 echo "== fetch pinned sources =="
 clone_at "$BASE_REPO" "$BASE_COMMIT" "$WORK/base"
 clone_at "$DONOR_REPO" "$DONOR_COMMIT" "$WORK/donor"
+clone_at "$CAMERA_REPO" "$CAMERA_COMMIT" "$WORK/camera-donor"
 clone_at "$TOOLCHAIN_REPO" "$TOOLCHAIN_COMMIT" "$WORK/toolchain"
 
 KERNEL="$WORK/base/kernel-3.18"
@@ -53,7 +57,10 @@ grep -q '^PATCHLEVEL = 18$' "$KERNEL/Makefile"
 grep -q '^SUBLEVEL = 79$' "$KERNEL/Makefile"
 
 echo "== integrate T20-only missing drivers =="
-python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/donor"
+python3 "$ROOT/scripts/prepare_source.py" \
+  --kernel "$KERNEL" \
+  --donor "$WORK/donor" \
+  --camera-donor "$WORK/camera-donor"
 
 echo "== host compatibility patches for old MTK build tools =="
 python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
