@@ -12,10 +12,20 @@ PAGE = 2048
 ANDROID_MAGIC = b"ANDROID!"
 MTK_MAGIC = 0x58881688
 MTK_HEADER_SIZE = 512
+BOOT_ID_OFFSET = 576
+BOOT_ID_SIZE = 32
 
 
 def align_up(value: int, alignment: int) -> int:
     return (value + alignment - 1) // alignment * alignment
+
+
+def mkbootimg_id(kernel: bytes, ramdisk: bytes, second: bytes) -> bytes:
+    h = hashlib.sha1()
+    for blob in (kernel, ramdisk, second):
+        h.update(blob)
+        h.update(struct.pack("<I", len(blob)))
+    return h.digest() + b"\0" * (BOOT_ID_SIZE - h.digest_size)
 
 
 def make_stock_boot() -> tuple[bytes, bytes, bytes, bytes]:
@@ -46,6 +56,9 @@ def make_stock_boot() -> tuple[bytes, bytes, bytes, bytes]:
     cmdline = b"console=tty0 androidboot.test=1\0"
     header[48:48 + len(name)] = name
     header[64:64 + len(cmdline)] = cmdline
+    header[BOOT_ID_OFFSET:BOOT_ID_OFFSET + BOOT_ID_SIZE] = mkbootimg_id(
+        stock_kernel, ramdisk, second
+    )
     assert len(header) == PAGE
 
     image = bytearray(header)
@@ -59,8 +72,8 @@ def make_stock_boot() -> tuple[bytes, bytes, bytes, bytes]:
 
 
 class RepackStockBootTest(unittest.TestCase):
-    def test_cli_preserves_everything_after_kernel(self) -> None:
-        stock, stock_kernel, _ramdisk, _second = make_stock_boot()
+    def test_cli_preserves_payload_and_updates_canonical_id(self) -> None:
+        stock, stock_kernel, ramdisk, second = make_stock_boot()
         new_kernel = b"new-Image.gz-dtb" * 409
 
         stock_kernel_size = struct.unpack_from("<I", stock, 8)[0]
@@ -113,17 +126,23 @@ class RepackStockBootTest(unittest.TestCase):
         new_ramdisk_off = align_up(PAGE + packed_size, PAGE)
         self.assertEqual(out[new_ramdisk_off:], old_tail)
 
-        self.assertEqual(out[:8], ANDROID_MAGIC)
-        self.assertEqual(out[12:PAGE], stock[12:PAGE])
-
         packed_kernel = out[PAGE:PAGE + packed_size]
         self.assertEqual(struct.unpack_from("<I", packed_kernel, 0)[0], MTK_MAGIC)
         self.assertEqual(struct.unpack_from("<I", packed_kernel, 4)[0], len(new_kernel))
         self.assertEqual(packed_kernel[8:MTK_HEADER_SIZE], stock_kernel[8:MTK_HEADER_SIZE])
         self.assertEqual(packed_kernel[MTK_HEADER_SIZE:], new_kernel)
 
+        expected_header = bytearray(stock[:PAGE])
+        struct.pack_into("<I", expected_header, 8, packed_size)
+        expected_id = mkbootimg_id(packed_kernel, ramdisk, second)
+        expected_header[BOOT_ID_OFFSET:BOOT_ID_OFFSET + BOOT_ID_SIZE] = expected_id
+        self.assertEqual(out[:PAGE], bytes(expected_header))
+
         self.assertTrue(report["mtk_wrapper_preserved"])
         self.assertEqual(report["mtk_name"], "KERNEL")
+        self.assertEqual(report["boot_id_mode"], "canonical_sha1")
+        self.assertTrue(report["boot_id_recomputed"])
+        self.assertEqual(report["output_boot_id_hex"], expected_id.hex())
         self.assertEqual(report["preserved_tail_sha256"], hashlib.sha256(old_tail).hexdigest())
         self.assertEqual(report["boot_partition_size"], 0x02000000)
 
@@ -160,6 +179,34 @@ class RepackStockBootTest(unittest.TestCase):
 
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("too large", proc.stderr + proc.stdout)
+
+    def test_cli_rejects_avb_footer(self) -> None:
+        stock, _stock_kernel, _ramdisk, _second = make_stock_boot()
+        footer = bytearray(64)
+        footer[:4] = b"AVBf"
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            stock_path = root / "boot-stock.img"
+            kernel_path = root / "Image.gz-dtb"
+            output_path = root / "boot.img"
+            stock_path.write_bytes(stock + footer)
+            kernel_path.write_bytes(b"kernel")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("repack_stock_boot.py")),
+                    str(stock_path),
+                    str(kernel_path),
+                    str(output_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("AVB footer detected", proc.stderr + proc.stdout)
 
 
 if __name__ == "__main__":
