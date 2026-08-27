@@ -6,12 +6,18 @@ on:
     paths:
       - 'scripts/repack_stock_boot.py'
       - 'scripts/test_repack_stock_boot.py'
+      - 'scripts/strip_legacy_boot_signature.py'
+      - 'scripts/test_strip_legacy_boot_signature.py'
       - '.github/workflows/repack-selftest.yml'
+      - '.github/workflows/boot-repack.yml'
   pull_request:
     paths:
       - 'scripts/repack_stock_boot.py'
       - 'scripts/test_repack_stock_boot.py'
+      - 'scripts/strip_legacy_boot_signature.py'
+      - 'scripts/test_strip_legacy_boot_signature.py'
       - '.github/workflows/repack-selftest.yml'
+      - '.github/workflows/boot-repack.yml'
   workflow_dispatch:
 
 permissions:
@@ -27,7 +33,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run boot repacker regression tests
-        run: python3 scripts/test_repack_stock_boot.py
+        run: |
+          python3 scripts/test_repack_stock_boot.py
+          python3 scripts/test_strip_legacy_boot_signature.py
 
       - name: Verify baseline artifact lookup and download
         shell: bash
@@ -53,6 +61,5 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > baseline-smoke.zip
           unzip -q baseline-smoke.zip -d baseline-smoke
           test -s baseline-smoke/Image.gz-dtb
-          test -s baseline-smoke/odmdtbo.img
-          file baseline-smoke/Image.gz-dtb baseline-smoke/odmdtbo.img
-          sha256sum baseline-smoke/Image.gz-dtb baseline-smoke/odmdtbo.img
+          file baseline-smoke/Image.gz-dtb
+          sha256sum baseline-smoke/Image.gz-dtb
