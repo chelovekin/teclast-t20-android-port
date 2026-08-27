@@ -53,6 +53,66 @@ def main() -> None:
         k / "drivers/misc/mediatek/sensors-1.0/alsps/LTR303",
     )
 
+    # Adapt the MT8176/MT6397 LQ101 donor to the MT6797/MT6351 ABI.  The donor
+    # toggles the old MT6397 VGP4 LDO with upmu_set_rg_vgp4_*(), but MT6797's
+    # PMIC API has no VGP4 at all (its generic programmable LDO is VGP3).  The
+    # factory T20 8.1 DTBO marks VGP3 default-on and the factory kernel's LQ101
+    # platform-driver strings show only gpio_lcm_pwr_en, not an LCM1V8/VGP4
+    # regulator consumer.  Keep the panel GPIO sequencing and remove only the
+    # three stale MT6397 VGP4 calls rather than inventing a different rail.
+    lq_dir = k / "drivers/misc/mediatek/lcm/lq101r1sx01a_wqxga_dsi_vdo"
+    lq_main = lq_dir / "lq101r1sx01a_wqxga_dsi_vdo.c"
+    lq_text = lq_main.read_text()
+    lq_text, vgp4_count = re.subn(
+        r'^[ \t]*upmu_set_rg_vgp4_(?:sw_en|vosel)\s*\([^;]+\);[ \t]*\r?\n?',
+        '',
+        lq_text,
+        flags=re.MULTILINE,
+    )
+    if vgp4_count != 3:
+        raise RuntimeError(
+            f"expected exactly 3 active MT6397 VGP4 calls in LQ101 donor, found {vgp4_count}"
+        )
+    if re.search(r'^[ \t]*upmu_set_rg_vgp4_', lq_text, flags=re.MULTILINE):
+        raise RuntimeError("active MT6397 VGP4 call remains in LQ101 donor")
+    lq_main.write_text(lq_text)
+
+    # The donor's companion platform driver is also MT8173-specific.  The
+    # actual T20 8.1 kernel contains the compatible string mediatek,mt6797-lcm
+    # and only requests gpio_lcm_pwr_en.  Mirror that observed stock shape:
+    # do not request donor-only reset/LED GPIO properties or the absent LCM1V8
+    # regulator.  This keeps probe tied to the real MT6797 lcm node.
+    lq_plat = lq_dir / "lcm_drv_lq101r1sx01a_wqxga_dsi_vdo.c"
+    plat_text = lq_plat.read_text()
+    old_compatible = 'compatible = "mediatek,mt8173-lcm"'
+    if old_compatible not in plat_text:
+        raise RuntimeError("expected MT8173 LQ101 compatible string not found")
+    plat_text = plat_text.replace(
+        old_compatible,
+        'compatible = "mediatek,mt6797-lcm"',
+        1,
+    )
+    request_re = re.compile(
+        r'static int lcm_request_gpio_control\(struct device \*dev\)\s*\{.*?\n\}\n\nstatic int lcm_probe',
+        re.DOTALL,
+    )
+    request_replacement = '''static int lcm_request_gpio_control(struct device *dev)\n{\n\tint ret;\n\n\tGPIO_LCD_PWR_EN = of_get_named_gpio(dev->of_node, "gpio_lcm_pwr_en", 0);\n\tret = gpio_request(GPIO_LCD_PWR_EN, "GPIO_LCD_PWR_EN");\n\tif (ret)\n\t\tprintk("[KE/LCM] gpio request GPIO_LCD_PWR_EN = 0x%x fail with %d\\n",\n\t\t       GPIO_LCD_PWR_EN, ret);\n\n\treturn ret;\n}\n\nstatic int lcm_probe'''
+    plat_text, request_count = request_re.subn(request_replacement, plat_text, count=1)
+    if request_count != 1:
+        raise RuntimeError("could not replace donor LQ101 GPIO/regulator probe")
+    if 'regulator_get(dev, "LCM1V8")' in plat_text:
+        raise RuntimeError("donor LCM1V8 regulator consumer remains")
+    if 'of_get_named_gpio(dev->of_node, "gpio_led"' in plat_text:
+        raise RuntimeError("donor LQ101 LED GPIO request remains")
+    if 'of_get_named_gpio(dev->of_node, "gpio_lcm_rst_en"' in plat_text:
+        raise RuntimeError("donor LQ101 reset GPIO request remains")
+    lq_plat.write_text(plat_text)
+    print(
+        f"LQ101 MT6797 adaptation: removed {vgp4_count} MT6397 VGP4 call(s), "
+        "matched factory mt6797-lcm probe",
+        flush=True,
+    )
+
     # The MT6797 Android-8 base has the generic LCM registry but does not know
     # the factory T20 panel imported above. CONFIG_CUSTOM_KERNEL_LCM is turned
     # into the LQ101R1SX01A_WQXGA_DSI_VDO preprocessor define by the existing
