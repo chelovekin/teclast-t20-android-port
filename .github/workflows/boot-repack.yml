@@ -1,0 +1,114 @@
+name: T20 test boot repack
+
+on:
+  workflow_dispatch:
+    inputs:
+      stock_boot_url:
+        description: Direct HTTPS URL to the exact stock T20 Android 8.1 boot.img
+        required: true
+        type: string
+      stock_boot_sha256:
+        description: SHA-256 of that stock boot.img
+        required: true
+        type: string
+      scatter_url:
+        description: Optional direct HTTPS URL to the matching MT6797 scatter file
+        required: false
+        type: string
+      scatter_sha256:
+        description: SHA-256 of the scatter file when scatter_url is supplied
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  repack:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout port project
+        uses: actions/checkout@v4
+
+      - name: Fetch latest successful factory-kernel artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="$({
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/kernel-baseline.yml/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id'
+          })"
+          test -n "$run_id" && test "$run_id" != null
+
+          artifact_id="$({
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.name | startswith("T20-kernel-baseline-")) | .id' | head -n1
+          })"
+          test -n "$artifact_id"
+
+          mkdir -p baseline
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > baseline.zip
+          unzip -q baseline.zip -d baseline
+          test -s baseline/Image.gz-dtb
+          test -s baseline/odmdtbo.img
+          printf 'baseline_run_id=%s\nbaseline_artifact_id=%s\n' "$run_id" "$artifact_id" > baseline/source.txt
+
+      - name: Download and authenticate stock boot image
+        shell: bash
+        env:
+          STOCK_BOOT_URL: ${{ inputs.stock_boot_url }}
+          STOCK_BOOT_SHA256: ${{ inputs.stock_boot_sha256 }}
+        run: |
+          set -euo pipefail
+          test "${STOCK_BOOT_URL#https://}" != "$STOCK_BOOT_URL"
+          mkdir -p stock-input
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output stock-input/boot.img "$STOCK_BOOT_URL"
+          printf '%s  %s\n' "${STOCK_BOOT_SHA256,,}" stock-input/boot.img | sha256sum -c -
+
+      - name: Download and authenticate scatter file
+        if: ${{ inputs.scatter_url != '' }}
+        shell: bash
+        env:
+          SCATTER_URL: ${{ inputs.scatter_url }}
+          SCATTER_SHA256: ${{ inputs.scatter_sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$SCATTER_SHA256"
+          test "${SCATTER_URL#https://}" != "$SCATTER_URL"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output stock-input/MT6797_Android_scatter.txt "$SCATTER_URL"
+          printf '%s  %s\n' "${SCATTER_SHA256,,}" stock-input/MT6797_Android_scatter.txt | sha256sum -c -
+
+      - name: Repack stock boot with factory-config kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          args=(
+            stock-input/boot.img
+            baseline/Image.gz-dtb
+            out/boot.img
+            --report out/BOOT_REPACK_REPORT.json
+          )
+          if [[ -s stock-input/MT6797_Android_scatter.txt ]]; then
+            args+=(--scatter stock-input/MT6797_Android_scatter.txt)
+          fi
+          python3 scripts/repack_stock_boot.py "${args[@]}"
+          cp baseline/odmdtbo.img out/odmdtbo.img
+          cp baseline/source.txt out/BASELINE_SOURCE.txt
+          sha256sum out/boot.img out/odmdtbo.img > out/SHA256SUMS
+
+      - name: Upload test images
+        uses: actions/upload-artifact@v4
+        with:
+          name: T20-test-boot-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
