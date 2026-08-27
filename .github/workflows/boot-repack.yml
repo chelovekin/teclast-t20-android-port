@@ -56,7 +56,6 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > baseline.zip
           unzip -q baseline.zip -d baseline
           test -s baseline/Image.gz-dtb
-          test -s baseline/odmdtbo.img
           printf 'baseline_run_id=%s\nbaseline_artifact_id=%s\n' "$run_id" "$artifact_id" > baseline/source.txt
 
       - name: Download and authenticate stock boot image
@@ -94,18 +93,27 @@ jobs:
           args=(
             stock-input/boot.img
             baseline/Image.gz-dtb
-            out/boot.img
+            out/boot.with-stock-trailer.img
             --report out/BOOT_REPACK_REPORT.json
           )
           if [[ -s stock-input/MT6797_Android_scatter.txt ]]; then
             args+=(--scatter stock-input/MT6797_Android_scatter.txt)
           fi
           python3 scripts/repack_stock_boot.py "${args[@]}"
-          cp baseline/odmdtbo.img out/odmdtbo.img
-          cp baseline/source.txt out/BASELINE_SOURCE.txt
-          sha256sum out/boot.img out/odmdtbo.img > out/SHA256SUMS
 
-      - name: Upload test images
+          # The exact 2019-03-12 T20 stock boot carries an Android Verified Boot
+          # 1.0 DER /boot signature after the aligned payload. Replacing the
+          # kernel invalidates it. On an unlocked/orange test device the stale
+          # signature must not be presented as valid metadata.
+          python3 scripts/strip_legacy_boot_signature.py \
+            out/boot.with-stock-trailer.img out/boot.img \
+            --report out/BOOT_SIGNATURE_REPORT.json
+          rm out/boot.with-stock-trailer.img
+
+          cp baseline/source.txt out/BASELINE_SOURCE.txt
+          sha256sum out/boot.img > out/SHA256SUMS
+
+      - name: Upload test image
         uses: actions/upload-artifact@v4
         with:
           name: T20-test-boot-${{ github.run_number }}
