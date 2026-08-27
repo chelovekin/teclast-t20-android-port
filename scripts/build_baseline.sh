@@ -85,6 +85,14 @@ string_compat = (
 )
 if '_py2_string.atoi' not in s:
     p.write_text(string_compat + s, errors='surrogateescape')
+
+# 2to3 wraps dict.items() with list(). EintData already uses a local variable
+# named 'list', which makes that generated call an UnboundLocalError.
+p = root / 'data' / 'EintData.py'
+s = p.read_text(errors='surrogateescape')
+s = s.replace('for (key, value) in list(map.items()):',
+              'for (key, value) in map.items():')
+p.write_text(s, errors='surrogateescape')
 PY
 
 # Linux 3.18's shipped DTC lexer defines yylloc as a tentative common symbol.
