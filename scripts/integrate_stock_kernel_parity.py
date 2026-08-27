@@ -44,12 +44,32 @@ def integrate_goodix(kernel: Path) -> None:
     # but bind it to the exact T20 SPI child and exact stock pinctrl state names.
     c = dst / "gf_common.c"
     s = c.read_text()
+
+    # MT6797 donor carry-over: this header is absent from the Android-8 MT6797
+    # tree and the only vcorefs calls in this Goodix source are commented out.
+    # Removing the unused include changes no executable Goodix behavior.
+    s = replace_exact(
+        s,
+        '#if defined(CONFIG_ARCH_MT6797)\n#include <mt_vcorefs_manager.h>\n#endif\n',
+        '',
+        "remove unused MT6755 vcorefs include",
+    )
+
     s = replace_exact(
         s,
         '{ .compatible = "mediatek,goodix-fp", },',
         '{ .compatible = "goodix,fingerprint", },',
         "Goodix SPI compatible",
     )
+    # The donor has one stale sensor-info lookup spelling not present in the
+    # exact March Image. The T20 platform pinctrl node is mediatek,goodix-fp.
+    s = replace_exact(
+        s,
+        'of_find_compatible_node(NULL, NULL, "goodix,goodix-fp")',
+        'of_find_compatible_node(NULL, NULL, "mediatek,goodix-fp")',
+        "Goodix platform-node compatible",
+    )
+
     pin_names = {
         '"fp_state_eint_as_int"': '"fingerprint_irq"',
         '"fp_default"': '"default"',
@@ -74,6 +94,8 @@ def integrate_goodix(kernel: Path) -> None:
     for token in required:
         if token not in s and token not in (dst / "gf_common.h").read_text():
             raise RuntimeError(f"Goodix donor ABI marker missing: {token}")
+    if 'goodix,goodix-fp' in s:
+        raise RuntimeError("stale non-stock Goodix compatible survived adaptation")
     c.write_text(s)
 
     # The recovered stock Kconfig says FPC1145, but the exact March kernel
@@ -173,12 +195,16 @@ static int ln4913_setup_eint(struct platform_device *pdev, struct ln4913_data *d
     int ret;
 
     eint = of_find_compatible_node(NULL, NULL, "mediatek,irq_hall-eint");
-    if (!eint)
+    if (!eint) {
+        dev_err(&pdev->dev, "%s : can not find hall eint compatible node\n", __func__);
         return -ENODEV;
+    }
     d->irq = irq_of_parse_and_map(eint, 0);
     of_node_put(eint);
-    if (d->irq <= 0)
+    if (d->irq <= 0) {
+        dev_err(&pdev->dev, "[hall]EINT IRQ LINE NOT AVAILABLE\n");
         return -EINVAL;
+    }
 
     ret = devm_request_threaded_irq(&pdev->dev, d->irq, NULL, ln4913_eint_func,
                                     IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
@@ -186,6 +212,7 @@ static int ln4913_setup_eint(struct platform_device *pdev, struct ln4913_data *d
     if (ret)
         return ret;
     enable_irq_wake(d->irq);
+    dev_info(&pdev->dev, "[hall]hall set EINT finished, hall_irq=%d\n", d->irq);
     return 0;
 }
 
@@ -216,13 +243,14 @@ static int ln4913_probe(struct platform_device *pdev)
     input_set_capability(d->input, EV_SW, SW_LID);
     ret = input_register_device(d->input);
     if (ret) {
-        dev_err(&pdev->dev, "hall sensor register input device failed\n");
+        dev_err(&pdev->dev, "hall sensor register input device failed (%d)\n", ret);
         return ret;
     }
 
     ret = ln4913_setup_eint(pdev, d);
     if (ret)
         return ret;
+    dev_info(&pdev->dev, "[hall]hall_irq=%d\n", d->irq);
     ln4913_report(d);
     return 0;
 }
@@ -238,8 +266,10 @@ static int ln4913_remove(struct platform_device *pdev)
 static int ln4913_suspend(struct platform_device *pdev, pm_message_t state)
 {
     struct ln4913_data *d = platform_get_drvdata(pdev);
-    if (d)
+    if (d) {
         d->suspended = true;
+        dev_info(&pdev->dev, "[ln4913] hall close\n");
+    }
     return 0;
 }
 
@@ -248,6 +278,7 @@ static int ln4913_resume(struct platform_device *pdev)
     struct ln4913_data *d = platform_get_drvdata(pdev);
     if (d) {
         d->suspended = false;
+        dev_info(&pdev->dev, "[ln4913] hall open\n");
         ln4913_report(d);
     }
     return 0;
@@ -325,6 +356,8 @@ def verify(kernel: Path) -> None:
     ):
         if token not in goodix:
             raise RuntimeError(f"integrated Goodix marker missing: {token}")
+    if 'mt_vcorefs_manager.h' in goodix or 'goodix,goodix-fp' in goodix:
+        raise RuntimeError("non-MT6797 Goodix donor residue survived adaptation")
 
     hall = (kernel / "drivers/misc/mediatek/sensors-1.0/hall/ln4913/ln4913.c").read_text()
     for token in ('mediatek,hall-gpio-int', 'mediatek,irq_hall-eint', 'ln4913_Driver', 'wisky_hall'):
