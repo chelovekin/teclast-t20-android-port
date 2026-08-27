@@ -139,6 +139,10 @@ p.write_text(s)
 print("BQ24296 adapted to native MT6797 MT6351 PMIC register API", flush=True)
 PY
 
+# Resolve the two final-link dependencies exposed after every T20 driver
+# compiled: RT5735's BATFET fallback and the LQ101 donor's MT8176 hall flag.
+python3 "$ROOT/scripts/fix_final_link_compat.py" "$KERNEL"
+
 echo "== host compatibility patches for old MTK build tools =="
 python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
 python3 - "$KERNEL/tools/dct" <<'PY'
