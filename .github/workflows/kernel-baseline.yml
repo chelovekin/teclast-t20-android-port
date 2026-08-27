@@ -31,8 +31,36 @@ jobs:
             libncurses-dev python3 perl ca-certificates zip device-tree-compiler \
             binutils file
 
+      - name: Select factory compiler
+        shell: bash
+        run: |
+          # Factory boot reports: gcc version 6.3.1 20170109
+          # (Linaro GCC 6.3-2017.02). Pin that exact public Linaro release.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/build_baseline.sh')
+          s = p.read_text()
+          replacements = {
+              'https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git':
+                  'https://github.com/khadas/buildroot_toolchain_gcc_linux-x86_aarch64_gcc-linaro-6.3.1-2017.02-x86_64_aarch64-linux-gnu.git',
+              '7280ce2399316a5dbd8872e0bfe69435d8719230':
+                  '0bf3bc2500c1e5141bf3cd97789e2c57f51cc631',
+              'CROSS_COMPILE="$TOOLCHAIN/bin/aarch64-linux-android-"':
+                  'CROSS_COMPILE="$TOOLCHAIN/bin/aarch64-linux-gnu-"',
+              'export KBUILD_BUILD_USER=t20-ci': 'export KBUILD_BUILD_USER=android',
+              'export KBUILD_BUILD_HOST=github': 'export KBUILD_BUILD_HOST=tomato',
+          }
+          for old, new in replacements.items():
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected one occurrence: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
       - name: Build factory-config Linux 3.18.79 baseline
         shell: bash
+        env:
+          KBUILD_BUILD_TIMESTAMP: 'Tue Mar 12 12:31:29 CST 2019'
         run: |
           set +e
           bash scripts/build_baseline.sh
@@ -43,10 +71,9 @@ jobs:
             exit 0
           fi
 
-          # Run #33 proved compilation and final linking complete. The old
-          # script then returned 1 because it searched the gzip-compressed
-          # Image.gz-dtb with strings(1). Recover only that exact post-build
-          # false negative, and independently verify the uncompressed vmlinux.
+          # The legacy script searches the gzip-compressed Image.gz-dtb with
+          # strings(1). Recover only that post-build false negative, and
+          # independently verify the uncompressed vmlinux.
           KOUT="$RUNNER_TEMP/t20-kernel-baseline/kout"
           VMLINUX="$KOUT/vmlinux"
           ODMDTBO="$KOUT/arch/arm64/boot/dts/odmdtbo.img"
