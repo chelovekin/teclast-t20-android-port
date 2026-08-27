@@ -92,6 +92,20 @@ def main() -> None:
     if re.search(r'\bg_pstI2Cclient->timing\b', otp_text):
         raise RuntimeError("unsupported S5K3L9 i2c_client timing assignment remains")
     otp_c.write_text(otp_text)
+
+    # The MT6795 donor used the removed legacy mach/mt_boot.h include. The
+    # Android-8 MT6797 tree exposes the same boot_mode_t/get_boot_mode ABI from
+    # mt-plat/mt_boot_common.h, including FACTORY_BOOT used by this driver.
+    otp_h = cam_dst / "s5k3l9otp.h"
+    otp_h_text = otp_h.read_text()
+    legacy_boot_include = '#include "mach/mt_boot.h"'
+    if legacy_boot_include not in otp_h_text:
+        raise RuntimeError("expected S5K3L9 legacy boot header include not found")
+    otp_h.write_text(otp_h_text.replace(
+        legacy_boot_include,
+        '#include <mt-plat/mt_boot_common.h>',
+        1,
+    ))
     print(f"S5K3L9 MT6797 I2C adaptation: removed {camera_timing_count} timing assignment(s)", flush=True)
 
     # The donor GSLX680 comes from an MTK tree with CONFIG_MTK_I2C_EXTENSION,
