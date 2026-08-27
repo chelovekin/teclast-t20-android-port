@@ -55,6 +55,9 @@ grep -q '^SUBLEVEL = 79$' "$KERNEL/Makefile"
 echo "== integrate T20-only missing drivers =="
 python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/donor"
 
+echo "== convert legacy MTK DCT tools to Python 3 =="
+python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
+
 echo "== reconstruct exact Android 8.1 factory config =="
 bash "$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
 cp "$WORK/stock.config" "$OUT/stock.config"
@@ -70,7 +73,7 @@ export KBUILD_BUILD_HOST=github
 readelf -h "$KERNEL/drivers/input/touchscreen/mediatek/GSlX680/gsl_point_id" | grep -q 'Machine:.*AArch64'
 
 echo "== resolve Kconfig against patched source =="
-make -C "$KERNEL" O="$KOUT" olddefconfig
+make -C "$KERNEL" O="$KOUT" python=python3 olddefconfig
 cp "$KOUT/.config" "$OUT/resolved.config"
 
 required=(
@@ -122,7 +125,7 @@ PY
 echo "== build Linux 3.18.79 T20 baseline =="
 JOBS="$(nproc)"
 [[ "$JOBS" -gt 4 ]] && JOBS=4
-make -C "$KERNEL" O="$KOUT" -j"$JOBS" Image.gz-dtb
+make -C "$KERNEL" O="$KOUT" python=python3 -j"$JOBS" Image.gz-dtb
 
 IMAGE="$KOUT/arch/arm64/boot/Image.gz-dtb"
 test -s "$IMAGE"
