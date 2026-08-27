@@ -11,6 +11,7 @@ on:
       - 'scripts/fix_s5k3l9_pdaf.py'
       - 'scripts/prepare_source.py'
       - 'scripts/integrate_stock_kernel_parity.py'
+      - 'scripts/integrate_final_factory_parity.py'
       - 'scripts/reconstruct_stock_config.sh'
       - 'stock/**'
 
@@ -61,10 +62,9 @@ jobs:
               s = s.replace(old, new, 1)
 
           # Keep the archived factory config untouched, but reproduce the
-          # actual March-2019 binary composition: Goodix REE + LN4913, no FPC.
-          # CONFIG_CUSTOM_KERNEL_HALL is a vendor-only symbol absent from the
-          # public tree, so olddefconfig drops it; switch that one generated
-          # Makefile line to obj-y after integrating the reconstructed driver.
+          # actual March-2019 binary composition: Goodix REE + LN4913, no FPC,
+          # plus the reconstructed speaker pin_ctrl/audio path and factory SPI
+          # reserved-memory registration observed in the exact stock Image.
           needle = '  --camera-donor "$WORK/camera-donor"\n'
           if s.count(needle) != 1:
               raise SystemExit('could not locate prepare_source completion')
@@ -72,6 +72,7 @@ jobs:
               '\npython3 "$ROOT/scripts/integrate_stock_kernel_parity.py" --kernel "$KERNEL"\n'
               "sed -i 's#obj-$(CONFIG_CUSTOM_KERNEL_HALL) += hall/#obj-y += hall/#' "
               '"$KERNEL/drivers/misc/mediatek/sensors-1.0/Makefile"\n'
+              'python3 "$ROOT/scripts/integrate_final_factory_parity.py" --kernel "$KERNEL"\n'
           )
           s = s.replace(needle, needle + parity, 1)
           p.write_text(s)
@@ -111,8 +112,7 @@ jobs:
             exit 22
           fi
 
-          # Exact March-2019 factory-binary parity gates. These source paths and
-          # ABI strings are present in the stock Image and absent from run #36.
+          # Exact March-2019 factory-binary parity gates.
           grep -aFq 'drivers/input/fingerprint/goodix_ree/gf_common.c' "$VMLINUX"
           grep -aFq 'goodix,fingerprint' "$VMLINUX"
           grep -aFq 'mediatek,goodix-fp' "$VMLINUX"
@@ -120,6 +120,11 @@ jobs:
           grep -aFq 'drivers/misc/mediatek/sensors-1.0/hall/ln4913/ln4913.c' "$VMLINUX"
           grep -aFq 'mediatek,hall-gpio-int' "$VMLINUX"
           grep -aFq 'ln4913_Driver' "$VMLINUX"
+          grep -aFq 'mediatek,pin_ctrl' "$VMLINUX"
+          grep -aFq 'gpio_spk_en' "$VMLINUX"
+          grep -aFq 'gezi AudDrv_GPIO_EXTAMP_Select bEnable = %d,mode = %d' "$VMLINUX"
+          grep -aFq 'mediatek,spi-reserve-memory' "$VMLINUX"
+          grep -aFq 'reserve_memory_spi_fn' "$VMLINUX"
           if grep -aFq 'drivers/input/fingerprint/fpc/fpc1020_main.c' "$VMLINUX"; then
             echo 'ERROR: FPC implementation is linked but absent from exact March stock kernel'
             exit 21
@@ -129,7 +134,10 @@ jobs:
           grep -Eq '[[:space:]][Tt][[:space:]]+battery_disable_batfet$' "$RUNNER_TEMP/t20-vmlinux.nm"
           grep -Eq '[[:space:]][Tt][[:space:]]+gf_probe$' "$RUNNER_TEMP/t20-vmlinux.nm"
           grep -Eq '[[:space:]][Tt][[:space:]]+ln4913_probe$' "$RUNNER_TEMP/t20-vmlinux.nm"
-          grep -E '([[:space:]]gf_|[[:space:]]ln4913_)' "$RUNNER_TEMP/t20-vmlinux.nm" > out/hardware-symbols.txt
+          grep -Eq '[[:space:]][Tt][[:space:]]+pin_ctrl_probe$' "$RUNNER_TEMP/t20-vmlinux.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+gpio_spk_en_set$' "$RUNNER_TEMP/t20-vmlinux.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+reserve_memory_spi_fn$' "$RUNNER_TEMP/t20-vmlinux.nm"
+          grep -E '([[:space:]]gf_|[[:space:]]ln4913_|[[:space:]]pin_ctrl|[[:space:]]gpio_spk_en_set|[[:space:]]reserve_memory_spi_fn)' "$RUNNER_TEMP/t20-vmlinux.nm" > out/hardware-symbols.txt
           rm -f "$RUNNER_TEMP/t20-vmlinux.nm"
 
           cp "$ODMDTBO" out/odmdtbo.img
