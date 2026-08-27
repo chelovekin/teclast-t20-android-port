@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="$ROOT/out"
+WORK="${RUNNER_TEMP:-$ROOT/.work}/t20-kernel-baseline"
+LOG="$OUT/build.log"
+
+BASE_REPO="https://github.com/dguidipc/gemini-android-kernel-3.18-android8.git"
+BASE_COMMIT="1a0acd5b806d370097fa0ce46fef0680ba27e4b7"
+DONOR_REPO="https://github.com/Goayandi/android_kernel_mt8176_common.git"
+DONOR_COMMIT="3979f3de3ac2308dbf455117aa5eaf23f28edc55"
+TOOLCHAIN_REPO="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git"
+TOOLCHAIN_COMMIT="7280ce2399316a5dbd8872e0bfe69435d8719230"
+
+rm -rf "$OUT" "$WORK"
+mkdir -p "$OUT" "$WORK"
+exec > >(tee "$LOG") 2>&1
+
+status=1
+finish() {
+  rc=$?
+  {
+    echo "result=$([[ $rc -eq 0 ]] && echo PASS || echo FAIL)"
+    echo "exit_code=$rc"
+    echo "base_commit=$BASE_COMMIT"
+    echo "donor_commit=$DONOR_COMMIT"
+    echo "toolchain_commit=$TOOLCHAIN_COMMIT"
+  } > "$OUT/BUILD_STATUS.txt"
+  exit "$rc"
+}
+trap finish EXIT
+
+clone_at() {
+  local url="$1" sha="$2" dst="$3"
+  git init -q "$dst"
+  git -C "$dst" remote add origin "$url"
+  git -C "$dst" fetch -q --depth=1 origin "$sha"
+  git -C "$dst" checkout -q --detach FETCH_HEAD
+  test "$(git -C "$dst" rev-parse HEAD)" = "$sha"
+}
+
+echo "== fetch pinned sources =="
+clone_at "$BASE_REPO" "$BASE_COMMIT" "$WORK/base"
+clone_at "$DONOR_REPO" "$DONOR_COMMIT" "$WORK/donor"
+clone_at "$TOOLCHAIN_REPO" "$TOOLCHAIN_COMMIT" "$WORK/toolchain"
+
+KERNEL="$WORK/base/kernel-3.18"
+TOOLCHAIN="$WORK/toolchain"
+
+grep -q '^VERSION = 3$' "$KERNEL/Makefile"
+grep -q '^PATCHLEVEL = 18$' "$KERNEL/Makefile"
+grep -q '^SUBLEVEL = 79$' "$KERNEL/Makefile"
+
+echo "== integrate T20-only missing drivers =="
+python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/donor"
+
+echo "== reconstruct exact Android 8.1 factory config =="
+"$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
+cp "$WORK/stock.config" "$OUT/stock.config"
+cp "$WORK/stock.config" "$KERNEL/.config"
+
+export ARCH=arm64
+export SUBARCH=arm64
+export CROSS_COMPILE="$TOOLCHAIN/bin/aarch64-linux-android-"
+export KBUILD_BUILD_USER=t20-ci
+export KBUILD_BUILD_HOST=github
+
+"${CROSS_COMPILE}gcc" --version | head -n 1
+readelf -h "$KERNEL/drivers/input/touchscreen/mediatek/GSlX680/gsl_point_id" | grep -q 'Machine:.*AArch64'
+
+echo "== resolve Kconfig against patched source =="
+make -C "$KERNEL" olddefconfig
+cp "$KERNEL/.config" "$OUT/resolved.config"
+
+required=(
+  'CONFIG_ARCH_MT6797=y'
+  'CONFIG_MTK_PLATFORM="mt6797"'
+  'CONFIG_ARCH_MTK_PROJECT="k97v1_64_bsp"'
+  'CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y'
+  'CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES="mt6797"'
+  'CONFIG_TOUCHSCREEN_MTK_GSlX680=y'
+  'CONFIG_MTK_MSA300=y'
+  'CONFIG_MTK_LTR303=y'
+  'CONFIG_MTK_FINGERPRINT_SUPPORT=y'
+  'CONFIG_MTK_FINGERPRINT_SELECT="FPC1145"'
+  'CONFIG_FPC_FINGERPRINT=y'
+  'CONFIG_MTK_GPU_VERSION="mali midgard r20p0"'
+  'CONFIG_CUSTOM_KERNEL_LCM="lq101r1sx01a_wqxga_dsi_vdo"'
+  'CONFIG_REGULATOR_RT5735=y'
+  'CONFIG_MTK_BQ24296_SUPPORT=y'
+)
+for line in "${required[@]}"; do
+  grep -Fqx "$line" "$KERNEL/.config" || {
+    echo "ERROR: required stock setting lost: $line"
+    exit 20
+  }
+done
+
+# Keep a machine-readable list of changes introduced solely by Kconfig
+# resolution. A perfect baseline should drive this toward zero.
+if command -v python3 >/dev/null; then
+  python3 - "$OUT/stock.config" "$OUT/resolved.config" > "$OUT/config_delta.txt" <<'PY'
+import sys
+
+def load(p):
+    d={}
+    for raw in open(p, errors='replace'):
+        s=raw.rstrip('\n')
+        if s.startswith('CONFIG_') and '=' in s:
+            k=s.split('=',1)[0]; d[k]=s
+        elif s.startswith('# CONFIG_') and s.endswith(' is not set'):
+            k=s.split()[1]; d[k]=s
+    return d
+
+a=load(sys.argv[1]); b=load(sys.argv[2])
+for k in sorted(set(a)|set(b)):
+    if a.get(k) != b.get(k):
+        print(f'{k}: {a.get(k, "<missing>")} -> {b.get(k, "<missing>")}')
+PY
+fi
+
+echo "== build Linux 3.18.79 T20 baseline =="
+JOBS="$(nproc)"
+[[ "$JOBS" -gt 4 ]] && JOBS=4
+make -C "$KERNEL" -j"$JOBS" Image.gz-dtb
+
+IMAGE="$KERNEL/arch/arm64/boot/Image.gz-dtb"
+test -s "$IMAGE"
+cp "$IMAGE" "$OUT/Image.gz-dtb"
+cp "$KERNEL/arch/arm64/boot/Image.gz" "$OUT/Image.gz"
+cp "$KERNEL/arch/arm64/boot/dts/mt6797.dtb" "$OUT/mt6797.dtb"
+sha256sum "$OUT/Image.gz-dtb" "$OUT/Image.gz" "$OUT/mt6797.dtb" > "$OUT/SHA256SUMS"
+
+# Static fingerprints expected from the T20 factory configuration/source.
+strings "$OUT/Image.gz-dtb" | grep -Fq 'lq101r1sx01a_wqxga_dsi_vdo'
+strings "$OUT/Image.gz-dtb" | grep -Fq 'mali midgard r20p0'
+
+echo "BASELINE BUILD PASS"
+status=0
