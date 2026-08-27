@@ -6,6 +6,8 @@ from pathlib import Path
 
 
 def copy_dir(src: Path, dst: Path) -> None:
+    if not src.is_dir():
+        raise RuntimeError(f"required donor directory missing: {src}")
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
@@ -24,14 +26,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--kernel", required=True)
     ap.add_argument("--donor", required=True)
+    ap.add_argument("--camera-donor", required=True)
     args = ap.parse_args()
 
     k = Path(args.kernel).resolve()
     d = Path(args.donor).resolve()
+    cam = Path(args.camera_donor).resolve()
 
     # T20 Android 8.1 stock config requests these components, but the public
-    # MT6797 Android-8 tree is missing them. Import the closest pinned MTK 3.18
-    # implementations and integrate them into the Android-8 sensor framework.
+    # MT6797 Android-8 tree is missing them. Import pinned MTK implementations
+    # and adapt only what is required to build them in this source framework.
     copy_dir(
         d / "drivers/input/touchscreen/mediatek/GSlX680",
         k / "drivers/input/touchscreen/mediatek/GSlX680",
@@ -47,6 +51,21 @@ def main() -> None:
     copy_dir(
         d / "drivers/misc/mediatek/alsps/LTR303",
         k / "drivers/misc/mediatek/sensors-1.0/alsps/LTR303",
+    )
+
+    # The exact stock config also names s5k3l9_mipi_raw, but that directory is
+    # absent from the public MT6797 Android-8 tree. The closest public MTK
+    # implementation found is pinned separately and imported as a compatibility
+    # donor. It is intentionally kept isolated so provenance is explicit.
+    copy_dir(
+        cam / "drivers/misc/mediatek/imgsensor/src/mt6795/s5k3l9_mipi_raw",
+        k / "drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw",
+    )
+    # Its old tree included a global Makefile.custom that the Android-8 MT6797
+    # source does not contain. Only the two local objects are needed here.
+    (k / "drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw/Makefile").write_text(
+        "obj-y += s5k3l9otp.o\n"
+        "obj-y += s5k3l9mipiraw_Sensor.o\n"
     )
 
     # The donor GSLX680 comes from an MTK tree with CONFIG_MTK_I2C_EXTENSION,
@@ -70,8 +89,8 @@ def main() -> None:
     print(f"GSLX680 MT6797 I2C adaptation: removed {count} timing assignment(s)", flush=True)
 
     # The donor GSL Makefile contains project-specific ARM paths and debug
-    # warnings. Keep only the architecture-neutral rules, including its
-    # required prebuilt AArch64 gsl_point_id object.
+    # warnings. Keep only architecture-neutral rules, including its required
+    # prebuilt AArch64 gsl_point_id object.
     (k / "drivers/input/touchscreen/mediatek/GSlX680/Makefile").write_text(
         "ccflags-y += -I$(srctree)/drivers/input/touchscreen/mediatek/GSlX680/\n"
         "ccflags-y += -I$(srctree)/drivers/input/touchscreen/mediatek/\n"
