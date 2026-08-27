@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 import sys
+import urllib.request
 from pathlib import Path
 
 
@@ -223,3 +224,103 @@ sensor_p.write_text(sensor)
 print("S5K3L9 PDAF OTP read path wired into CAM_CAL dispatcher", flush=True)
 print("S5K3L9 sensor donor adapted to MT6797 camera ABI", flush=True)
 print("S5K3L9 donor-only warning failures cleaned locally", flush=True)
+
+# Locate the kernel root from the camera file passed by build_baseline.sh.
+kernel = p.resolve()
+while kernel.name != "kernel-3.18":
+    if kernel.parent == kernel:
+        raise RuntimeError("could not locate kernel-3.18 root")
+    kernel = kernel.parent
+
+# The MSA300 donor is from the pre-sensors-1.0 framework.  Android-8 changed
+# get_accel_dts_func() from a compatible-name lookup returning a pointer to an
+# int-returning parser that consumes the bound I2C device_node.  Move parsing
+# into probe, matching the native Android-8 MTK accelerometer drivers.
+msa_p = kernel / "drivers/misc/mediatek/sensors-1.0/accelerometer/msa300/msa_cust.c"
+msa = msa_p.read_text()
+msa_init_old = re.compile(
+    r'(?P<indent>[ \t]*)const char \*name = "mediatek,msa300";\s*'
+    r'MI_FUN;\s*'
+    r'hw = get_accel_dts_func\(name, hw\);\s*'
+    r'if \(!hw\)\s*MI_ERR\("get dts info fail\\n"\);',
+    re.MULTILINE,
+)
+msa, count = msa_init_old.subn(lambda m: m.group('indent') + 'MI_FUN;', msa, count=1)
+if count != 1 and 'get_accel_dts_func(name, hw)' in msa:
+    raise RuntimeError("could not remove legacy MSA300 name-based DTS parser")
+msa_probe_anchor = "\tobj->hw = hw;"
+msa_probe_block = (
+    "\tres = get_accel_dts_func(client->dev.of_node, hw);\n"
+    "\tif (res < 0) {\n"
+    "\t\tMI_ERR(\"get dts info fail\\n\");\n"
+    "\t\tgoto exit_init_failed;\n"
+    "\t}\n\n"
+    "\tobj->hw = hw;"
+)
+if "get_accel_dts_func(client->dev.of_node, hw)" not in msa:
+    if msa_probe_anchor not in msa:
+        raise RuntimeError("could not locate MSA300 probe hardware assignment")
+    msa = msa.replace(msa_probe_anchor, msa_probe_block, 1)
+msa_p.write_text(msa)
+print("MSA300 adapted to Android-8 sensors-1.0 DTS ABI", flush=True)
+
+# LTR303 needs the same Android-8 DTS ABI migration.  The old standalone batch
+# registration call is intentionally removed: sensors-1.0 carries batch
+# capability in als_control_path.is_support_batch, as the in-tree Android-8
+# drivers do (their legacy batch_register_support_info blocks are disabled).
+ltr_p = kernel / "drivers/misc/mediatek/sensors-1.0/alsps/LTR303/ltr303.c"
+ltr = ltr_p.read_text()
+ltr_init_old = re.compile(
+    r'(?P<indent>[ \t]*)const char \*name = "mediatek,ltr303";\s*'
+    r'APS_FUN\(\);\s*'
+    r'hw = get_alsps_dts_func\(name, hw\);\s*'
+    r'if \(!hw\)\s*APS_ERR\("get dts info fail\\n"\);',
+    re.MULTILINE,
+)
+ltr, count = ltr_init_old.subn(lambda m: m.group('indent') + 'APS_FUN();', ltr, count=1)
+if count != 1 and 'get_alsps_dts_func(name, hw)' in ltr:
+    raise RuntimeError("could not remove legacy LTR303 name-based DTS parser")
+ltr_probe_anchor = "\tobj->hw = hw;"
+ltr_probe_block = (
+    "\terr = get_alsps_dts_func(client->dev.of_node, hw);\n"
+    "\tif (err < 0) {\n"
+    "\t\tAPS_ERR(\"get dts info fail\\n\");\n"
+    "\t\tgoto exit_init_failed;\n"
+    "\t}\n\n"
+    "\tobj->hw = hw;"
+)
+if "get_alsps_dts_func(client->dev.of_node, hw)" not in ltr:
+    if ltr_probe_anchor not in ltr:
+        raise RuntimeError("could not locate LTR303 probe hardware assignment")
+    ltr = ltr.replace(ltr_probe_anchor, ltr_probe_block, 1)
+legacy_batch = "err = batch_register_support_info(ID_LIGHT,als_ctl.is_support_batch, 1, 0);"
+if legacy_batch in ltr:
+    ltr = ltr.replace(
+        legacy_batch,
+        "err = 0; /* sensors-1.0 uses als_ctl.is_support_batch */",
+        1,
+    )
+if "batch_register_support_info(" in ltr:
+    raise RuntimeError("legacy LTR303 batch registration call remains")
+ltr_p.write_text(ltr)
+print("LTR303 adapted to Android-8 sensors-1.0 DTS/batch ABI", flush=True)
+
+# The selected public MT6797 Android-8 tree has the exact factory Makefile
+# entries for BQ24296 but omits bq24296.c/.h and charging_hw_bq24296.c.  Import
+# those three files from a pinned MediaTek Linux-3.18.79 tree.  Keeping the raw
+# URL pinned to a full commit makes this source reconstruction reproducible.
+bq_commit = "ab0f5a519edaf314e9b537e448838ec9a4a9a3c8"
+bq_base = (
+    "https://raw.githubusercontent.com/bq/aquaris-M10/"
+    + bq_commit
+    + "/drivers/misc/mediatek/power/mt8167/"
+)
+bq_dst = kernel / "drivers/misc/mediatek/power/mt6797"
+for name in ("bq24296.c", "bq24296.h", "charging_hw_bq24296.c"):
+    url = bq_base + name
+    with urllib.request.urlopen(url, timeout=60) as r:
+        data = r.read()
+    if not data or b"Copyright (C) 2015 MediaTek Inc." not in data:
+        raise RuntimeError(f"unexpected BQ24296 donor payload: {name}")
+    (bq_dst / name).write_bytes(data)
+print(f"BQ24296 MTK 3.18.79 donor imported at {bq_commit}", flush=True)
