@@ -55,18 +55,43 @@ grep -q '^SUBLEVEL = 79$' "$KERNEL/Makefile"
 echo "== integrate T20-only missing drivers =="
 python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/donor"
 
-echo "== convert legacy MTK DCT tools to Python 3 =="
+echo "== host compatibility patches for old MTK build tools =="
 python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
 python3 - "$KERNEL/tools/dct" <<'PY'
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
-compat = "def cmp(a, b):\n    return (a > b) - (a < b)\n\n"
+compat = (
+    "def cmp(a, b):\n"
+    "    return (a > b) - (a < b)\n\n"
+)
 for p in root.rglob('*.py'):
     s = p.read_text(errors='surrogateescape')
     if 'cmp(' in s and 'def cmp(' not in s:
         p.write_text(compat + s, errors='surrogateescape')
+
+# Python 2 exposed atoi/atol/atof from string. DCT imports the same module
+# object from many files, so patching it in the entrypoint restores that API.
+p = root / 'DrvGen.py'
+s = p.read_text(errors='surrogateescape')
+string_compat = (
+    "import string as _py2_string\n"
+    "if not hasattr(_py2_string, 'atoi'):\n"
+    "    _py2_string.atoi = lambda s, base=10: int(s, base)\n"
+    "if not hasattr(_py2_string, 'atol'):\n"
+    "    _py2_string.atol = lambda s, base=10: int(s, base)\n"
+    "if not hasattr(_py2_string, 'atof'):\n"
+    "    _py2_string.atof = float\n\n"
+)
+if '_py2_string.atoi' not in s:
+    p.write_text(string_compat + s, errors='surrogateescape')
 PY
+
+# Linux 3.18's shipped DTC lexer defines yylloc as a tentative common symbol.
+# Modern host GCC defaults to -fno-common, so leave the definition to parser.
+sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
+  "$KERNEL/scripts/dtc/dtc-lexer.l" \
+  "$KERNEL/scripts/dtc/dtc-lexer.lex.c_shipped"
 
 echo "== reconstruct exact Android 8.1 factory config =="
 bash "$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
