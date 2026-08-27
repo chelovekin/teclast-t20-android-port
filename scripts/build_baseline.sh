@@ -17,7 +17,6 @@ rm -rf "$OUT" "$WORK"
 mkdir -p "$OUT" "$WORK"
 exec > >(tee "$LOG") 2>&1
 
-status=1
 finish() {
   rc=$?
   {
@@ -27,7 +26,6 @@ finish() {
     echo "donor_commit=$DONOR_COMMIT"
     echo "toolchain_commit=$TOOLCHAIN_COMMIT"
   } > "$OUT/BUILD_STATUS.txt"
-  exit "$rc"
 }
 trap finish EXIT
 
@@ -97,28 +95,27 @@ for line in "${required[@]}"; do
   }
 done
 
-# Keep a machine-readable list of changes introduced solely by Kconfig
-# resolution. A perfect baseline should drive this toward zero.
-if command -v python3 >/dev/null; then
-  python3 - "$OUT/stock.config" "$OUT/resolved.config" > "$OUT/config_delta.txt" <<'PY'
+python3 - "$OUT/stock.config" "$OUT/resolved.config" > "$OUT/config_delta.txt" <<'PY'
 import sys
 
 def load(p):
-    d={}
+    d = {}
     for raw in open(p, errors='replace'):
-        s=raw.rstrip('\n')
+        s = raw.rstrip('\n')
         if s.startswith('CONFIG_') and '=' in s:
-            k=s.split('=',1)[0]; d[k]=s
+            k = s.split('=', 1)[0]
+            d[k] = s
         elif s.startswith('# CONFIG_') and s.endswith(' is not set'):
-            k=s.split()[1]; d[k]=s
+            k = s.split()[1]
+            d[k] = s
     return d
 
-a=load(sys.argv[1]); b=load(sys.argv[2])
-for k in sorted(set(a)|set(b)):
+a = load(sys.argv[1])
+b = load(sys.argv[2])
+for k in sorted(set(a) | set(b)):
     if a.get(k) != b.get(k):
         print(f'{k}: {a.get(k, "<missing>")} -> {b.get(k, "<missing>")}')
 PY
-fi
 
 echo "== build Linux 3.18.79 T20 baseline =="
 JOBS="$(nproc)"
@@ -132,9 +129,7 @@ cp "$KERNEL/arch/arm64/boot/Image.gz" "$OUT/Image.gz"
 cp "$KERNEL/arch/arm64/boot/dts/mt6797.dtb" "$OUT/mt6797.dtb"
 sha256sum "$OUT/Image.gz-dtb" "$OUT/Image.gz" "$OUT/mt6797.dtb" > "$OUT/SHA256SUMS"
 
-# Static fingerprints expected from the T20 factory configuration/source.
 strings "$OUT/Image.gz-dtb" | grep -Fq 'lq101r1sx01a_wqxga_dsi_vdo'
 strings "$OUT/Image.gz-dtb" | grep -Fq 'mali midgard r20p0'
 
 echo "BASELINE BUILD PASS"
-status=0
