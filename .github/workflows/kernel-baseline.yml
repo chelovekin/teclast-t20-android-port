@@ -6,7 +6,11 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/kernel-baseline.yml'
-      - 'scripts/**'
+      - 'scripts/build_baseline.sh'
+      - 'scripts/fix_final_link_compat.py'
+      - 'scripts/fix_s5k3l9_pdaf.py'
+      - 'scripts/prepare_source.py'
+      - 'scripts/reconstruct_stock_config.sh'
       - 'stock/**'
 
 permissions:
