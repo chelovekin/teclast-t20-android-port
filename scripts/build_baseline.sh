@@ -57,6 +57,16 @@ python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/dono
 
 echo "== convert legacy MTK DCT tools to Python 3 =="
 python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
+python3 - "$KERNEL/tools/dct" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+compat = "def cmp(a, b):\n    return (a > b) - (a < b)\n\n"
+for p in root.rglob('*.py'):
+    s = p.read_text(errors='surrogateescape')
+    if 'cmp(' in s and 'def cmp(' not in s:
+        p.write_text(compat + s, errors='surrogateescape')
+PY
 
 echo "== reconstruct exact Android 8.1 factory config =="
 bash "$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
