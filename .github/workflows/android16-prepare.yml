@@ -1,0 +1,93 @@
+name: T20 Android 16 prepare
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android16-prepare.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_URL: https://github.com/ponces/treble_aosp/releases/download/v2025.06.25/aosp-arm64-ab-vanilla-16.0-20250625.img.xz
+  SOURCE_SHA256: f3abc15e85fb3d8050881c0710259f8e12baf8fd5cf05598e672073b7816c831
+  SYSTEM_PARTITION_SIZE: '2684354560'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout port project
+        uses: actions/checkout@v4
+
+      - name: Install image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            wget xz-utils e2fsprogs attr android-sdk-libsparse-utils file
+
+      - name: Download verified Android 16 TrebleDroid base
+        run: |
+          set -euxo pipefail
+          wget -O android16.img.xz "$SOURCE_URL"
+          echo "$SOURCE_SHA256  android16.img.xz" | sha256sum -c -
+          unxz android16.img.xz
+          mv android16.img android16-sar.img
+          file android16-sar.img
+          ls -lh android16-sar.img
+
+      - name: Convert Android 16 image for T20 legacy system partition
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/AndyCGYan/sas-creator.git
+          sudo bash sas-creator/run.sh 64 "$GITHUB_WORKSPACE/android16-sar.img"
+          mkdir -p out
+          sudo mv sas-creator/s.img out/system-android16-t20.img
+          sudo chown "$USER:$USER" out/system-android16-t20.img
+
+      - name: Validate converted image offline
+        run: |
+          set -euxo pipefail
+          img=out/system-android16-t20.img
+          test -s "$img"
+          file "$img" | tee out/IMAGE_TYPE.txt
+          e2fsck -fn "$img" | tee out/FSCK.txt || test ${PIPESTATUS[0]} -le 1
+          bytes=$(stat -c %s "$img")
+          echo "image_bytes=$bytes" | tee out/REPORT.txt
+          echo "system_partition_bytes=$SYSTEM_PARTITION_SIZE" | tee -a out/REPORT.txt
+          if [ "$bytes" -gt "$SYSTEM_PARTITION_SIZE" ]; then
+            echo "ERROR: image does not fit T20 system partition" | tee -a out/REPORT.txt
+            exit 20
+          fi
+          mkdir -p mnt
+          sudo mount -o loop,ro "$img" mnt
+          test -f mnt/build.prop
+          grep -E '^ro.system.build.version.release=|^ro.build.version.release=' mnt/build.prop | tee -a out/REPORT.txt || true
+          test -d mnt/bin
+          test -d mnt/etc
+          test -d mnt/lib64
+          if [ -d mnt/system ]; then
+            echo 'ERROR: image is still system-as-root; T20 needs system-as-system' | tee -a out/REPORT.txt
+            sudo umount mnt
+            exit 21
+          fi
+          sudo umount mnt
+          sha256sum "$img" > out/SHA256SUMS
+
+      - name: Compress prepared image
+        run: |
+          set -euxo pipefail
+          xz -T0 -3 -v out/system-android16-t20.img
+          sha256sum out/system-android16-t20.img.xz >> out/SHA256SUMS
+
+      - name: Upload prepared Android 16 system image
+        uses: actions/upload-artifact@v4
+        with:
+          name: T20-Android16-system-${{ github.run_number }}
+          path: out/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
