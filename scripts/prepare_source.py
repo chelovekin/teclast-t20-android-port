@@ -114,8 +114,18 @@ def main() -> None:
         1,
     )
     otp_text = otp_text.replace(
+        'static kal_uint8 S5K3L9_Read_AWBAF_Otp(kal_uint8 address,unsigned char *iBuffer,unsigned int buffersize)\n{\n\tu8 readbuff, i;',
+        'static kal_uint8 S5K3L9_Read_AWBAF_Otp(kal_uint8 address,unsigned char *iBuffer,unsigned int buffersize)\n{\n\tu8 i;',
+        1,
+    )
+    otp_text = otp_text.replace(
         'static kal_bool S5K3L9_Read_PDAF_Otp(u16 Outdatalen,unsigned char * pOutputdata)\n{\n\tu8 readbuff, i;',
         'static kal_bool S5K3L9_Read_PDAF_Otp(u16 Outdatalen,unsigned char * pOutputdata)\n{\n\tunsigned int i;',
+        1,
+    )
+    otp_text = otp_text.replace(
+        '    else if(ui4_length == S5K3L9_LSC_OTP_SIZE)\n    {',
+        '    else if(ui4_length == S5K3L9_PDAF_OTP_SIZE)\n    {\n        S5K3L9_Read_PDAF_Otp(ui4_length, pinputdata);\n    }\n    else if(ui4_length == S5K3L9_LSC_OTP_SIZE)\n    {',
         1,
     )
     otp_text = otp_text.replace(
