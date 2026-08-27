@@ -57,16 +57,42 @@ def main() -> None:
     # absent from the public MT6797 Android-8 tree. The closest public MTK
     # implementation found is pinned separately and imported as a compatibility
     # donor. It is intentionally kept isolated so provenance is explicit.
+    cam_dst = k / "drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw"
     copy_dir(
         cam / "drivers/misc/mediatek/imgsensor/src/mt6795/s5k3l9_mipi_raw",
-        k / "drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw",
+        cam_dst,
     )
     # Its old tree included a global Makefile.custom that the Android-8 MT6797
     # source does not contain. Only the two local objects are needed here.
-    (k / "drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw/Makefile").write_text(
+    (cam_dst / "Makefile").write_text(
         "obj-y += s5k3l9otp.o\n"
         "obj-y += s5k3l9mipiraw_Sensor.o\n"
     )
+
+    # The older camera donor also assumes MTK_I2C_EXTENSION. MT6797's stock
+    # configuration does not enable it, so struct i2c_client has no `timing`
+    # member. The bus timing is owned by the MT6797 controller; remove only the
+    # donor-only assignment. linux/xlog.h is likewise absent and unused because
+    # this driver already routes LOG_INF through pr_debug().
+    sensor_c = cam_dst / "s5k3l9mipiraw_Sensor.c"
+    sensor_text = sensor_c.read_text()
+    sensor_text = re.sub(r'^#include <linux/xlog\.h>\s*\r?\n', '', sensor_text, flags=re.MULTILINE)
+    sensor_c.write_text(sensor_text)
+
+    otp_c = cam_dst / "s5k3l9otp.c"
+    otp_text = otp_c.read_text()
+    otp_text, camera_timing_count = re.subn(
+        r'^[ \t]*g_pstI2Cclient->timing\s*=\s*[^;]+;[ \t]*\r?\n?',
+        '',
+        otp_text,
+        flags=re.MULTILINE,
+    )
+    if camera_timing_count == 0:
+        raise RuntimeError("expected S5K3L9 donor i2c_client timing assignment not found")
+    if re.search(r'\bg_pstI2Cclient->timing\b', otp_text):
+        raise RuntimeError("unsupported S5K3L9 i2c_client timing assignment remains")
+    otp_c.write_text(otp_text)
+    print(f"S5K3L9 MT6797 I2C adaptation: removed {camera_timing_count} timing assignment(s)", flush=True)
 
     # The donor GSLX680 comes from an MTK tree with CONFIG_MTK_I2C_EXTENSION,
     # where struct i2c_msg has a vendor-only `timing` member. MT6797 uses the
