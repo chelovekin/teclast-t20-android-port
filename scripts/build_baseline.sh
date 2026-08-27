@@ -103,6 +103,42 @@ PY
 python3 "$ROOT/scripts/fix_s5k3l9_pdaf.py" \
   "$KERNEL/drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw/s5k3l9otp.c"
 
+# The pinned BQ24296 donor uses the older upmu_* PMIC accessor ABI.  MT6797's
+# own Android-8 charging drivers use pmic_{get,set}_register_value() with the
+# MT6351 register enum.  Translate only the eight donor calls that failed to
+# compile, using the exact register names from the native MT6797 charging code.
+python3 - "$KERNEL/drivers/misc/mediatek/power/mt6797/charging_hw_bq24296.c" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+replacements = {
+    'upmu_set_rg_bc11_bb_ctrl(1);':
+        'pmic_set_register_value(MT6351_PMIC_RG_BC11_BB_CTRL, 1);',
+    'upmu_set_rg_bc11_rst(1);':
+        'pmic_set_register_value(MT6351_PMIC_RG_BC11_RST, 1);',
+    'upmu_set_rg_vcdt_hv_vth(register_value);':
+        'pmic_set_register_value(MT6351_PMIC_RG_VCDT_HV_VTH, register_value);',
+    'upmu_get_rgs_vcdt_hv_det()':
+        'pmic_get_register_value(MT6351_PMIC_RGS_VCDT_HV_DET)',
+    'upmu_set_baton_tdet_en(1);':
+        'pmic_set_register_value(MT6351_PMIC_BATON_TDET_EN, 1);',
+    'upmu_set_rg_baton_en(1);':
+        'pmic_set_register_value(MT6351_PMIC_RG_BATON_EN, 1);',
+    'upmu_get_rgs_baton_undet()':
+        'pmic_get_register_value(MT6351_PMIC_RGS_BATON_UNDET)',
+    'upmu_get_rgs_chrdet()':
+        'pmic_get_register_value(MT6351_PMIC_RGS_CHRDET)',
+}
+for old, new in replacements.items():
+    count = s.count(old)
+    if count != 1:
+        raise RuntimeError(f"expected exactly one BQ24296 PMIC call {old!r}, found {count}")
+    s = s.replace(old, new, 1)
+p.write_text(s)
+print("BQ24296 adapted to native MT6797 MT6351 PMIC register API", flush=True)
+PY
+
 echo "== host compatibility patches for old MTK build tools =="
 python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
 python3 - "$KERNEL/tools/dct" <<'PY'
