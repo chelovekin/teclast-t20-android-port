@@ -61,6 +61,26 @@ python3 "$ROOT/scripts/prepare_source.py" \
   --kernel "$KERNEL" \
   --donor "$WORK/donor" \
   --camera-donor "$WORK/camera-donor"
+
+# prepare_source.py uses re.sub() to splice the MT6797 probe into the donor
+# platform driver. Python's replacement-string parser consumes the C "\\n"
+# escape in that generated printk and turns it into a literal newline. Repair
+# that one generated string deterministically before compilation. This stays
+# local to the generated donor copy; no compiler flags or warning policy change.
+python3 - "$KERNEL/drivers/misc/mediatek/lcm/lq101r1sx01a_wqxga_dsi_vdo/lcm_drv_lq101r1sx01a_wqxga_dsi_vdo.c" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+broken = 'printk("[KE/LCM] gpio request GPIO_LCD_PWR_EN = 0x%x fail with %d\n",'
+fixed = r'printk("[KE/LCM] gpio request GPIO_LCD_PWR_EN = 0x%x fail with %d\n",'
+if broken not in s:
+    raise SystemExit("expected generated broken LQ101 printk literal not found")
+s = s.replace(broken, fixed, 1)
+p.write_text(s)
+print("LQ101 generated printk literal repaired", flush=True)
+PY
+
 python3 "$ROOT/scripts/fix_s5k3l9_pdaf.py" \
   "$KERNEL/drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw/s5k3l9otp.c"
 
