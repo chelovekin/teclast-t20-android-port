@@ -9,6 +9,10 @@ from pathlib import Path
 ANDROID_MAGIC = b"ANDROID!"
 MTK_MAGIC = 0x58881688
 MTK_HEADER_SIZE = 512
+BOOT_ID_OFFSET = 576
+BOOT_ID_SIZE = 32
+AVB_FOOTER_SIZE = 64
+AVB_FOOTER_MAGIC = b"AVBf"
 
 
 def sha256(data: bytes) -> str:
@@ -25,16 +29,36 @@ def parse_u32le(buf: bytes, off: int) -> int:
     return struct.unpack_from("<I", buf, off)[0]
 
 
+def mkbootimg_v0_id(kernel: bytes, ramdisk: bytes, second: bytes) -> bytes:
+    """Return the 32-byte Android 8.1 mkbootimg id field."""
+    h = hashlib.sha1()
+    for blob in (kernel, ramdisk, second):
+        h.update(blob)
+        h.update(struct.pack("<I", len(blob)))
+    return h.digest() + b"\0" * (BOOT_ID_SIZE - h.digest_size)
+
+
+def decode_cstring(raw: bytes) -> str:
+    return raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+
+
 def parse_boot_image(data: bytes) -> dict:
     if len(data) < 48 or data[:8] != ANDROID_MAGIC:
         raise ValueError("not a legacy Android boot image (ANDROID! magic missing)")
 
+    if len(data) >= AVB_FOOTER_SIZE and data[-AVB_FOOTER_SIZE:-AVB_FOOTER_SIZE + 4] == AVB_FOOTER_MAGIC:
+        raise ValueError("AVB footer detected; refusing to preserve an invalidated boot signature")
+
     kernel_size = parse_u32le(data, 8)
+    kernel_addr = parse_u32le(data, 12)
     ramdisk_size = parse_u32le(data, 16)
+    ramdisk_addr = parse_u32le(data, 20)
     second_size = parse_u32le(data, 24)
+    second_addr = parse_u32le(data, 28)
+    tags_addr = parse_u32le(data, 32)
     page_size = parse_u32le(data, 36)
-    word40 = parse_u32le(data, 40)
-    word44 = parse_u32le(data, 44)
+    unused = parse_u32le(data, 40)
+    os_version = parse_u32le(data, 44)
 
     if page_size < 512 or page_size > 65536 or page_size & (page_size - 1):
         raise ValueError(f"implausible page_size={page_size}")
@@ -55,14 +79,41 @@ def parse_boot_image(data: bytes) -> dict:
     if second_end > len(data):
         raise ValueError("second stage extends beyond boot image")
 
+    header_page = data[:page_size]
     kernel = data[kernel_off:kernel_end]
+    ramdisk = data[ramdisk_off:ramdisk_end]
+    second = data[second_off:second_end]
+
+    stored_id = None
+    canonical_id = None
+    id_mode = "unavailable"
+    if page_size >= BOOT_ID_OFFSET + BOOT_ID_SIZE:
+        stored_id = header_page[BOOT_ID_OFFSET:BOOT_ID_OFFSET + BOOT_ID_SIZE]
+        canonical_id = mkbootimg_v0_id(kernel, ramdisk, second)
+        if stored_id == canonical_id:
+            id_mode = "canonical_sha1"
+        elif stored_id == b"\0" * BOOT_ID_SIZE:
+            id_mode = "zero"
+        else:
+            id_mode = "vendor_or_unknown"
+
+    board = decode_cstring(header_page[48:64]) if page_size >= 64 else ""
+    cmdline = decode_cstring(header_page[64:min(576, page_size)]) if page_size > 64 else ""
+    if page_size > 608 and b"\0" not in header_page[64:min(576, page_size)]:
+        extra = decode_cstring(header_page[608:min(1632, page_size)])
+        cmdline += extra
+
     return {
         "kernel_size": kernel_size,
+        "kernel_addr": kernel_addr,
         "ramdisk_size": ramdisk_size,
+        "ramdisk_addr": ramdisk_addr,
         "second_size": second_size,
+        "second_addr": second_addr,
+        "tags_addr": tags_addr,
         "page_size": page_size,
-        "word40": word40,
-        "word44": word44,
+        "unused": unused,
+        "os_version": os_version,
         "kernel_off": kernel_off,
         "kernel_end": kernel_end,
         "ramdisk_off": ramdisk_off,
@@ -70,8 +121,15 @@ def parse_boot_image(data: bytes) -> dict:
         "second_off": second_off,
         "second_end": second_end,
         "kernel": kernel,
-        "header_page": data[:page_size],
+        "ramdisk": ramdisk,
+        "second": second,
+        "header_page": header_page,
         "tail": data[ramdisk_off:],
+        "board": board,
+        "cmdline": cmdline,
+        "stored_id": stored_id,
+        "canonical_id": canonical_id,
+        "id_mode": id_mode,
     }
 
 
@@ -103,8 +161,8 @@ def scatter_partition_size(path: Path, partition_name: str) -> int | None:
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=(
-            "Replace only the kernel payload in a legacy Android boot.img while "
-            "preserving the stock header page, ramdisk, second stage and trailing data."
+            "Replace only the kernel payload in an Android 8.1-era legacy boot.img "
+            "while preserving stock boot parameters, ramdisk, second stage and trailing data."
         )
     )
     ap.add_argument("stock_boot", type=Path)
@@ -125,6 +183,12 @@ def main() -> int:
 
     header = bytearray(meta["header_page"])
     struct.pack_into("<I", header, 8, len(replacement))
+
+    boot_id_recomputed = False
+    if meta["id_mode"] == "canonical_sha1":
+        new_id = mkbootimg_v0_id(replacement, meta["ramdisk"], meta["second"])
+        header[BOOT_ID_OFFSET:BOOT_ID_OFFSET + BOOT_ID_SIZE] = new_id
+        boot_id_recomputed = True
 
     out = bytearray(header)
     out += replacement
@@ -148,11 +212,23 @@ def main() -> int:
     args.output_boot.parent.mkdir(parents=True, exist_ok=True)
     args.output_boot.write_bytes(out)
 
+    output_id = None
+    if meta["stored_id"] is not None:
+        output_id = bytes(header[BOOT_ID_OFFSET:BOOT_ID_OFFSET + BOOT_ID_SIZE])
+
     report = {
         "stock_boot": str(args.stock_boot),
         "new_kernel": str(args.new_kernel),
         "output_boot": str(args.output_boot),
+        "board": meta["board"],
+        "cmdline": meta["cmdline"],
         "page_size": meta["page_size"],
+        "kernel_addr": meta["kernel_addr"],
+        "ramdisk_addr": meta["ramdisk_addr"],
+        "second_addr": meta["second_addr"],
+        "tags_addr": meta["tags_addr"],
+        "os_version_raw": meta["os_version"],
+        "legacy_unused_raw": meta["unused"],
         "stock_kernel_size": meta["kernel_size"],
         "raw_new_kernel_size": len(new_raw),
         "packed_new_kernel_size": len(replacement),
@@ -163,6 +239,10 @@ def main() -> int:
         "stock_boot_size": len(stock),
         "output_boot_size": len(out),
         "boot_partition_size": partition_size,
+        "boot_id_mode": meta["id_mode"],
+        "boot_id_recomputed": boot_id_recomputed,
+        "stock_boot_id_hex": meta["stored_id"].hex() if meta["stored_id"] is not None else None,
+        "output_boot_id_hex": output_id.hex() if output_id is not None else None,
         "stock_boot_sha256": sha256(stock),
         "raw_new_kernel_sha256": sha256(new_raw),
         "output_boot_sha256": sha256(out),
