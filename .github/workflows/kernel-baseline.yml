@@ -62,14 +62,18 @@ jobs:
 
           # Keep the archived factory config untouched, but reproduce the
           # actual March-2019 binary composition: Goodix REE + LN4913, no FPC.
+          # CONFIG_CUSTOM_KERNEL_HALL is a vendor-only symbol absent from the
+          # public tree, so olddefconfig drops it; switch that one generated
+          # Makefile line to obj-y after integrating the reconstructed driver.
           needle = '  --camera-donor "$WORK/camera-donor"\n'
           if s.count(needle) != 1:
               raise SystemExit('could not locate prepare_source completion')
-          s = s.replace(
-              needle,
-              needle + '\npython3 "$ROOT/scripts/integrate_stock_kernel_parity.py" --kernel "$KERNEL"\n',
-              1,
+          parity = (
+              '\npython3 "$ROOT/scripts/integrate_stock_kernel_parity.py" --kernel "$KERNEL"\n'
+              "sed -i 's#obj-$(CONFIG_CUSTOM_KERNEL_HALL) += hall/#obj-y += hall/#' "
+              '"$KERNEL/drivers/misc/mediatek/sensors-1.0/Makefile"\n'
           )
+          s = s.replace(needle, needle + parity, 1)
           p.write_text(s)
           PY
 
