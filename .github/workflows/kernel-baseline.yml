@@ -105,6 +105,11 @@ jobs:
 
           grep -aFq 'lq101r1sx01a_wqxga_dsi_vdo' "$VMLINUX"
           grep -aFq 'bq24296' "$VMLINUX"
+          grep -aFq 'mediatek,sw_charger' "$VMLINUX"
+          if grep -aFq 'ti,bq24296' "$VMLINUX"; then
+            echo 'ERROR: non-stock BQ24296 OF compatible survived adaptation'
+            exit 22
+          fi
 
           # Exact March-2019 factory-binary parity gates. These source paths and
           # ABI strings are present in the stock Image and absent from run #36.

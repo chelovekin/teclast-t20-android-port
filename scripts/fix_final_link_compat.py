@@ -15,6 +15,25 @@ root = Path(sys.argv[1])
 # second, wrong charger driver just to satisfy the link.
 bq = root / "drivers/misc/mediatek/power/mt6797/bq24296.c"
 s = bq.read_text()
+
+# The pinned MT8167 donor matches the BQ24296 register/I2C ABI but uses the
+# generic TI OF spelling.  The exact T20 2019-03-12 ODM overlay instead enables
+# sw_charger@6b with compatible="mediatek,sw_charger"; the factory kernel also
+# carries that exact compatible and not "ti,bq24296".  Bind to the stock node
+# so a code-only boot using the unmodified factory DTBO talks to address 0x6b.
+old_compat = '{ .compatible = "ti,bq24296" }'
+new_compat = '{ .compatible = "mediatek,sw_charger" }'
+if old_compat in s:
+    if s.count(old_compat) != 1:
+        raise RuntimeError("unexpected BQ24296 donor OF compatible count")
+    s = s.replace(old_compat, new_compat, 1)
+elif new_compat not in s:
+    raise RuntimeError("BQ24296 OF compatible not found")
+if 'ti,bq24296' in s:
+    raise RuntimeError("stale non-stock BQ24296 OF compatible remains")
+if 'bq24296_i2c_id[]' not in s or '"bq24296", 0' not in s:
+    raise RuntimeError("BQ24296 I2C id table no longer matches expected donor ABI")
+
 if "void battery_disable_batfet(void)" not in s:
     anchor = "void bq24296_set_batfet_disable(unsigned int val)"
     pos = s.find(anchor)
@@ -52,7 +71,7 @@ else:
     if "bq24296_set_batfet_disable(1);" not in s:
         raise RuntimeError("existing battery_disable_batfet is not the expected BQ24296 wrapper")
 bq.write_text(s)
-print("BQ24296 now provides MT6797 battery_disable_batfet helper", flush=True)
+print("BQ24296 now matches T20 sw_charger DT binding and provides battery_disable_batfet", flush=True)
 
 # The LQ101 donor exported its suspend flag through an MT8176 hall-sensor
 # driver.  That hall driver is not part of the T20 factory configuration; the
