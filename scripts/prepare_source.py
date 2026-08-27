@@ -53,6 +53,38 @@ def main() -> None:
         k / "drivers/misc/mediatek/sensors-1.0/alsps/LTR303",
     )
 
+    # The MT6797 Android-8 base has the generic LCM registry but does not know
+    # the factory T20 panel imported above. CONFIG_CUSTOM_KERNEL_LCM is turned
+    # into the LQ101R1SX01A_WQXGA_DSI_VDO preprocessor define by the existing
+    # MTK LCM Makefile, so register exactly the donor's exported driver symbol.
+    lcm_h = k / "drivers/misc/mediatek/lcm/mt65xx_lcm_list.h"
+    lcm_h_text = lcm_h.read_text()
+    lcm_decl = "extern LCM_DRIVER lq101r1sx01a_wqxga_dsi_vdo_lcm_drv;"
+    if lcm_decl not in lcm_h_text:
+        marker = "\n#ifdef BUILD_LK\n"
+        if marker not in lcm_h_text:
+            raise RuntimeError("could not locate LCM header insertion point")
+        lcm_h.write_text(lcm_h_text.replace(marker, "\n" + lcm_decl + "\n" + marker, 1))
+
+    lcm_c = k / "drivers/misc/mediatek/lcm/mt65xx_lcm_list.c"
+    lcm_c_text = lcm_c.read_text()
+    lcm_guard = "#if defined(LQ101R1SX01A_WQXGA_DSI_VDO)"
+    if lcm_guard not in lcm_c_text:
+        marker = "\n};\n\nunsigned char lcm_name_list"
+        if marker not in lcm_c_text:
+            raise RuntimeError("could not locate LCM driver-list insertion point")
+        block = (
+            "\n#if defined(LQ101R1SX01A_WQXGA_DSI_VDO)\n"
+            "\t&lq101r1sx01a_wqxga_dsi_vdo_lcm_drv,\n"
+            "#endif\n"
+        )
+        lcm_c.write_text(lcm_c_text.replace(
+            marker,
+            block + "\n};\n\nunsigned char lcm_name_list",
+            1,
+        ))
+    print("T20 factory LQ101 LCM registered in MT6797 driver list", flush=True)
+
     # The exact stock config also names s5k3l9_mipi_raw, but that directory is
     # absent from the public MT6797 Android-8 tree. The closest public MTK
     # implementation found is pinned separately and imported as a compatibility
