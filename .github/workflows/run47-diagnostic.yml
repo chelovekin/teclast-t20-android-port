@@ -1,0 +1,131 @@
+name: T20 run47 diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/run47-diagnostic.yml'
+      - 'scripts/integrate_run47_diag.py'
+
+permissions:
+  contents: read
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout port project
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git bc bison flex libssl-dev libelf-dev \
+            libncurses-dev python3 perl ca-certificates zip device-tree-compiler \
+            binutils file
+
+      - name: Select factory compiler and integrate run47 diagnostics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/build_baseline.sh')
+          s = p.read_text()
+          replacements = {
+              'https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git':
+                  'https://github.com/khadas/buildroot_toolchain_gcc_linux-x86_aarch64_gcc-linaro-6.3.1-2017.02-x86_64_aarch64-linux-gnu.git',
+              '7280ce2399316a5dbd8872e0bfe69435d8719230':
+                  '0bf3bc2500c1e5141bf3cd97789e2c57f51cc631',
+              'CROSS_COMPILE="$TOOLCHAIN/bin/aarch64-linux-android-"':
+                  'CROSS_COMPILE="$TOOLCHAIN/bin/aarch64-linux-gnu-"',
+              'export KBUILD_BUILD_USER=t20-ci': 'export KBUILD_BUILD_USER=android',
+              'export KBUILD_BUILD_HOST=github': 'export KBUILD_BUILD_HOST=tomato',
+          }
+          for old, new in replacements.items():
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected one occurrence: {old}')
+              s = s.replace(old, new, 1)
+
+          needle = '  --camera-donor "$WORK/camera-donor"\n'
+          if s.count(needle) != 1:
+              raise SystemExit('could not locate prepare_source completion')
+          parity_and_diag = (
+              '\npython3 "$ROOT/scripts/integrate_stock_kernel_parity.py" --kernel "$KERNEL"\n'
+              "sed -i 's#obj-$(CONFIG_CUSTOM_KERNEL_HALL) += hall/#obj-y += hall/#' "
+              '"$KERNEL/drivers/misc/mediatek/sensors-1.0/Makefile"\n'
+              'python3 "$ROOT/scripts/integrate_final_factory_parity.py" --kernel "$KERNEL"\n'
+              'python3 "$ROOT/scripts/integrate_run47_diag.py" --kernel "$KERNEL"\n'
+              "sed -i 's/^EXTRAVERSION =$/EXTRAVERSION = -t20run47/' \"$KERNEL/Makefile\"\n"
+          )
+          s = s.replace(needle, needle + parity_and_diag, 1)
+          p.write_text(s)
+          PY
+
+      - name: Build run47 with exact factory config and compiler
+        shell: bash
+        env:
+          KBUILD_BUILD_TIMESTAMP: 'Tue Mar 12 12:31:29 CST 2019'
+        run: |
+          set +e
+          bash scripts/build_baseline.sh
+          rc=$?
+          set -e
+
+          KOUT="$RUNNER_TEMP/t20-kernel-baseline/kout"
+          VMLINUX="$KOUT/vmlinux"
+          ODMDTBO="$KOUT/arch/arm64/boot/dts/odmdtbo.img"
+
+          if [[ $rc -ne 0 ]]; then
+            test "$rc" -eq 1
+          fi
+          test -s "$VMLINUX"
+          test -s "$ODMDTBO"
+          test -s out/Image.gz-dtb
+          test -s out/Image.gz
+          test -s out/mt6797.dtb
+
+          grep -aFq 'T20RUN47: PCM loop complete' "$VMLINUX"
+          grep -aFq 'T20RUN47: late_init enter' "$VMLINUX"
+          grep -aFq 'T20RUN47: SPM before __spm_kick_pcm_to_run' "$VMLINUX"
+          grep -aFq '3.18.79-t20run47' "$VMLINUX"
+
+          grep -aFq 'lq101r1sx01a_wqxga_dsi_vdo' "$VMLINUX"
+          grep -aFq 'mediatek,sw_charger' "$VMLINUX"
+          grep -aFq 'goodix,fingerprint' "$VMLINUX"
+          grep -aFq 'mediatek,goodix-fp' "$VMLINUX"
+          grep -aFq 'mediatek,hall-gpio-int' "$VMLINUX"
+          grep -aFq 'mediatek,pin_ctrl' "$VMLINUX"
+          grep -aFq 'mediatek,spi-reserve-memory' "$VMLINUX"
+          if grep -aFq 'drivers/input/fingerprint/fpc/fpc1020_main.c' "$VMLINUX"; then
+            echo 'ERROR: FPC implementation is linked but absent from exact March stock kernel'
+            exit 21
+          fi
+
+          nm "$VMLINUX" > "$RUNNER_TEMP/t20-run47.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+gf_probe$' "$RUNNER_TEMP/t20-run47.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+ln4913_probe$' "$RUNNER_TEMP/t20-run47.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+pin_ctrl_probe$' "$RUNNER_TEMP/t20-run47.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+gpio_spk_en_set$' "$RUNNER_TEMP/t20-run47.nm"
+          grep -Eq '[[:space:]][Tt][[:space:]]+reserve_memory_spi_fn$' "$RUNNER_TEMP/t20-run47.nm"
+          rm -f "$RUNNER_TEMP/t20-run47.nm"
+
+          cp "$ODMDTBO" out/odmdtbo.img
+          sha256sum out/Image.gz-dtb out/Image.gz out/mt6797.dtb out/odmdtbo.img > out/SHA256SUMS
+          sed -i 's/^result=.*/result=PASS/; s/^exit_code=.*/exit_code=0/' out/BUILD_STATUS.txt
+          printf '%s\n' 'run=47' 'marker=T20RUN47' 'kernel_release=3.18.79-t20run47' > out/RUN47.txt
+          echo 'RUN47 BUILD PASS'
+
+      - name: Upload run47 diagnostic kernel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: T20-run47-diagnostic-${{ github.run_number }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14
