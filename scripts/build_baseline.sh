@@ -54,7 +54,7 @@ echo "== integrate T20-only missing drivers =="
 python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/donor"
 
 echo "== reconstruct exact Android 8.1 factory config =="
-"$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
+bash "$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
 cp "$WORK/stock.config" "$OUT/stock.config"
 cp "$WORK/stock.config" "$KERNEL/.config"
 
