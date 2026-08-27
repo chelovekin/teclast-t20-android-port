@@ -91,6 +91,59 @@ def main() -> None:
         raise RuntimeError("expected S5K3L9 donor i2c_client timing assignment not found")
     if re.search(r'\bg_pstI2Cclient->timing\b', otp_text):
         raise RuntimeError("unsupported S5K3L9 i2c_client timing assignment remains")
+
+    # Pull the donor's old CAM_CAL helper onto the Android-8 MT6797 camera ABI.
+    # The factory config is arm64+compat, so keep the compat ioctl rather than
+    # deleting it. These edits are mechanical API migrations; OTP offsets and
+    # calibration payload handling are left intact.
+    otp_text = otp_text.replace(
+        '#include <linux/i2c.h>\n',
+        '#include <linux/module.h>\n#include <linux/i2c.h>\n#include "kd_camera_typedef.h"\n',
+        1,
+    )
+    otp_text = re.sub(r'^[ \t]*kal_uint16 get_byte\s*=\s*0;[ \t]*\r?\n', '', otp_text, flags=re.MULTILINE)
+    otp_text = re.sub(
+        r'^[ \t]*g_pstI2Cclient->addr\s*=\s*g_pstI2Cclient->addr\s*&\s*\(I2C_MASK_FLAG\);[ \t]*\r?\n',
+        '',
+        otp_text,
+        flags=re.MULTILINE,
+    )
+    otp_text = otp_text.replace(
+        'g_s5k3l9_otp_struct.module_id;\n',
+        'return g_s5k3l9_otp_struct.module_id;\n',
+        1,
+    )
+    otp_text = otp_text.replace(
+        'static kal_bool S5K3L9_Read_PDAF_Otp(u16 Outdatalen,unsigned char * pOutputdata)\n{\n\tu8 readbuff, i;',
+        'static kal_bool S5K3L9_Read_PDAF_Otp(u16 Outdatalen,unsigned char * pOutputdata)\n{\n\tunsigned int i;',
+        1,
+    )
+    otp_text = otp_text.replace(
+        'bool read_3l9_pdaf_data( kal_uint16 addr, BYTE* data, kal_uint32 size)',
+        'bool read_3l9_pdaf_data(kal_uint16 addr, unsigned char *data, kal_uint32 size)',
+        1,
+    )
+    otp_text = re.sub(
+        r'(int get_3l9_dvt_id\(void\)\s*\{\s*)int i\s*=\s*0;\s*',
+        r'\1',
+        otp_text,
+        count=1,
+    )
+    otp_text = otp_text.replace(
+        '    compat_uptr_t p;\n    compat_uint_t i;\n    int err;\n\n    err = get_user(i, &data->u4Offset);',
+        '    compat_uptr_t p;\n    compat_uint_t i;\n    void __user *up;\n    int err;\n\n    err = get_user(i, &data->u4Offset);',
+        1,
+    )
+    otp_text = otp_text.replace(
+        '    err |= get_user(p, &data->pu1Params);\n    err |= put_user(p, &data32->pu1Params);',
+        '    err |= get_user(up, &data->pu1Params);\n    p = ptr_to_compat(up);\n    err |= put_user(p, &data32->pu1Params);',
+        1,
+    )
+    otp_text = otp_text.replace(
+        '    case COMPAT_CAM_CALIOC_G_READ:\n    {\n        CAM_CALDB("[CAMERA SENSOR] COMPAT_CAM_CALIOC_G_READ\\n");\n        COMPAT_stCAM_CAL_INFO_STRUCT __user *data32;\n        stCAM_CAL_INFO_STRUCT __user *data;\n        int err;\n',
+        '    case COMPAT_CAM_CALIOC_G_READ:\n    {\n        COMPAT_stCAM_CAL_INFO_STRUCT __user *data32;\n        stCAM_CAL_INFO_STRUCT __user *data;\n        int err;\n\n        CAM_CALDB("[CAMERA SENSOR] COMPAT_CAM_CALIOC_G_READ\\n");\n',
+        1,
+    )
     otp_c.write_text(otp_text)
 
     # The MT6795 donor used the removed legacy mach/mt_boot.h include. The
