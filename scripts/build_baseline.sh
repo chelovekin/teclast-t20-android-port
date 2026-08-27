@@ -92,12 +92,20 @@ py2_compat = (
 if '_compat_ConfigParser' not in s:
     p.write_text(py2_compat + s, errors='surrogateescape')
 
-# 2to3 wraps dict.items() with list(). EintData already uses a local variable
-# named 'list', which makes that generated call an UnboundLocalError.
+# 2to3 wraps dict views with list(). EintData itself also names local values
+# 'list', so those generated built-in calls become UnboundLocalError. Remove
+# the unnecessary wrapping and rename the local in get_modeName.
 p = root / 'data' / 'EintData.py'
 s = p.read_text(errors='surrogateescape')
 s = s.replace('for (key, value) in list(map.items()):',
               'for (key, value) in map.items():')
+s = s.replace('if key in list(EintData._mode_map.keys()):',
+              'if key in EintData._mode_map:')
+s = s.replace('list =  EintData._mode_map[key]',
+              'mode_list = EintData._mode_map[key]')
+s = s.replace('if mode_idx < len(list) and mode_idx >= 0:',
+              'if mode_idx < len(mode_list) and mode_idx >= 0:')
+s = s.replace('return list[mode_idx]', 'return mode_list[mode_idx]')
 p.write_text(s, errors='surrogateescape')
 PY
 
