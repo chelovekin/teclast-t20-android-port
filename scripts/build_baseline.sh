@@ -115,6 +115,22 @@ sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
   "$KERNEL/scripts/dtc/dtc-lexer.l" \
   "$KERNEL/scripts/dtc/dtc-lexer.lex.c_shipped"
 
+# multiple_dtbo.py was written for Python 2, where text-mode file writes could
+# carry raw byte strings. Under Python 3 the DTB must be handled explicitly as
+# bytes or it is decoded as UTF-8 and fails on the first binary byte.
+python3 - "$KERNEL/scripts/multiple_dtbo.py" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+s = s.replace("with open(output_file, 'w') as fo:",
+              "with open(output_file, 'wb') as fo:")
+s = s.replace('fo.write("%s" % item)', 'fo.write(item)')
+s = s.replace("with open(input_file, 'r') as fi:",
+              "with open(input_file, 'rb') as fi:")
+p.write_text(s)
+PY
+
 echo "== reconstruct exact Android 8.1 factory config =="
 bash "$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
 cp "$WORK/stock.config" "$OUT/stock.config"
