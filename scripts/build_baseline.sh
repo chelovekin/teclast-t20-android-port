@@ -81,6 +81,25 @@ p.write_text(s)
 print("LQ101 generated printk literal repaired", flush=True)
 PY
 
+# The pinned MT8176 MSA300 donor stores Chinese comments in a legacy codepage.
+# Normalize that source copy to UTF-8 before the Python ABI adapter reads it.
+# This changes comments only; C tokens in the driver are ASCII.
+python3 - "$KERNEL/drivers/misc/mediatek/sensors-1.0/accelerometer/msa300/msa_cust.c" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+raw = p.read_bytes()
+try:
+    text = raw.decode("utf-8")
+except UnicodeDecodeError:
+    try:
+        text = raw.decode("gb18030")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+p.write_text(text, encoding="utf-8")
+print("MSA300 donor source normalized to UTF-8", flush=True)
+PY
+
 python3 "$ROOT/scripts/fix_s5k3l9_pdaf.py" \
   "$KERNEL/drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw/s5k3l9otp.c"
 
