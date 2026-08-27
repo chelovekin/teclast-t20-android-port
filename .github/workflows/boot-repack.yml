@@ -55,7 +55,7 @@ jobs:
           mkdir -p baseline
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > baseline.zip
           unzip -q baseline.zip -d baseline
-          test -s baseline/Image.gz-dtb
+          test -s baseline/Image.gz
           printf 'baseline_run_id=%s\nbaseline_artifact_id=%s\n' "$run_id" "$artifact_id" > baseline/source.txt
 
       - name: Download and authenticate stock boot image
@@ -85,14 +85,23 @@ jobs:
             --output stock-input/MT6797_Android_scatter.txt "$SCATTER_URL"
           printf '%s  %s\n' "${SCATTER_SHA256,,}" stock-input/MT6797_Android_scatter.txt | sha256sum -c -
 
-      - name: Repack stock boot with factory-config kernel
+      - name: Compose code-only first-boot kernel
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
+          python3 scripts/compose_kernel_with_stock_dtb.py \
+            stock-input/boot.img baseline/Image.gz out/Image.gz-stock-dtb \
+            --stock-dtb-out out/factory-base.dtb \
+            --report out/KERNEL_COMPOSITION_REPORT.json
+
+      - name: Repack stock boot with code-only kernel replacement
+        shell: bash
+        run: |
+          set -euo pipefail
           args=(
             stock-input/boot.img
-            baseline/Image.gz-dtb
+            out/Image.gz-stock-dtb
             out/boot.with-stock-trailer.img
             --report out/BOOT_REPACK_REPORT.json
           )
@@ -101,22 +110,21 @@ jobs:
           fi
           python3 scripts/repack_stock_boot.py "${args[@]}"
 
-          # The exact 2019-03-12 T20 stock boot carries an Android Verified Boot
-          # 1.0 DER /boot signature after the aligned payload. Replacing the
-          # kernel invalidates it. On an unlocked/orange test device the stale
-          # signature must not be presented as valid metadata.
+          # The 2019-03-12 factory image carries an Android Verified Boot 1.0
+          # DER /boot signature. Changing authenticated kernel bytes invalidates
+          # it, so an unlocked/orange first-boot image must not retain it.
           python3 scripts/strip_legacy_boot_signature.py \
             out/boot.with-stock-trailer.img out/boot.img \
             --report out/BOOT_SIGNATURE_REPORT.json
-          rm out/boot.with-stock-trailer.img
+          rm out/boot.with-stock-trailer.img out/Image.gz-stock-dtb
 
           cp baseline/source.txt out/BASELINE_SOURCE.txt
-          sha256sum out/boot.img > out/SHA256SUMS
+          sha256sum out/boot.img out/factory-base.dtb > out/SHA256SUMS
 
       - name: Upload test image
         uses: actions/upload-artifact@v4
         with:
-          name: T20-test-boot-${{ github.run_number }}
+          name: T20-first-boot-code-only-${{ github.run_number }}
           path: out/
           if-no-files-found: error
           retention-days: 14
