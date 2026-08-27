@@ -44,7 +44,9 @@ clone_at "$DONOR_REPO" "$DONOR_COMMIT" "$WORK/donor"
 clone_at "$TOOLCHAIN_REPO" "$TOOLCHAIN_COMMIT" "$WORK/toolchain"
 
 KERNEL="$WORK/base/kernel-3.18"
+KOUT="$WORK/kout"
 TOOLCHAIN="$WORK/toolchain"
+mkdir -p "$KOUT"
 
 grep -q '^VERSION = 3$' "$KERNEL/Makefile"
 grep -q '^PATCHLEVEL = 18$' "$KERNEL/Makefile"
@@ -56,7 +58,7 @@ python3 "$ROOT/scripts/prepare_source.py" --kernel "$KERNEL" --donor "$WORK/dono
 echo "== reconstruct exact Android 8.1 factory config =="
 bash "$ROOT/scripts/reconstruct_stock_config.sh" "$WORK/stock.config"
 cp "$WORK/stock.config" "$OUT/stock.config"
-cp "$WORK/stock.config" "$KERNEL/.config"
+cp "$WORK/stock.config" "$KOUT/.config"
 
 export ARCH=arm64
 export SUBARCH=arm64
@@ -68,8 +70,8 @@ export KBUILD_BUILD_HOST=github
 readelf -h "$KERNEL/drivers/input/touchscreen/mediatek/GSlX680/gsl_point_id" | grep -q 'Machine:.*AArch64'
 
 echo "== resolve Kconfig against patched source =="
-make -C "$KERNEL" olddefconfig
-cp "$KERNEL/.config" "$OUT/resolved.config"
+make -C "$KERNEL" O="$KOUT" olddefconfig
+cp "$KOUT/.config" "$OUT/resolved.config"
 
 required=(
   'CONFIG_ARCH_MT6797=y'
@@ -89,7 +91,7 @@ required=(
   'CONFIG_MTK_BQ24296_SUPPORT=y'
 )
 for line in "${required[@]}"; do
-  grep -Fqx "$line" "$KERNEL/.config" || {
+  grep -Fqx "$line" "$KOUT/.config" || {
     echo "ERROR: required stock setting lost: $line"
     exit 20
   }
@@ -120,13 +122,13 @@ PY
 echo "== build Linux 3.18.79 T20 baseline =="
 JOBS="$(nproc)"
 [[ "$JOBS" -gt 4 ]] && JOBS=4
-make -C "$KERNEL" -j"$JOBS" Image.gz-dtb
+make -C "$KERNEL" O="$KOUT" -j"$JOBS" Image.gz-dtb
 
-IMAGE="$KERNEL/arch/arm64/boot/Image.gz-dtb"
+IMAGE="$KOUT/arch/arm64/boot/Image.gz-dtb"
 test -s "$IMAGE"
 cp "$IMAGE" "$OUT/Image.gz-dtb"
-cp "$KERNEL/arch/arm64/boot/Image.gz" "$OUT/Image.gz"
-cp "$KERNEL/arch/arm64/boot/dts/mt6797.dtb" "$OUT/mt6797.dtb"
+cp "$KOUT/arch/arm64/boot/Image.gz" "$OUT/Image.gz"
+cp "$KOUT/arch/arm64/boot/dts/mt6797.dtb" "$OUT/mt6797.dtb"
 sha256sum "$OUT/Image.gz-dtb" "$OUT/Image.gz" "$OUT/mt6797.dtb" > "$OUT/SHA256SUMS"
 
 strings "$OUT/Image.gz-dtb" | grep -Fq 'lq101r1sx01a_wqxga_dsi_vdo'
