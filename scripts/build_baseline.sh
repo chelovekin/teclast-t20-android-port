@@ -61,6 +61,8 @@ python3 "$ROOT/scripts/prepare_source.py" \
   --kernel "$KERNEL" \
   --donor "$WORK/donor" \
   --camera-donor "$WORK/camera-donor"
+python3 "$ROOT/scripts/fix_s5k3l9_pdaf.py" \
+  "$KERNEL/drivers/misc/mediatek/imgsensor/src/mt6797/s5k3l9_mipi_raw/s5k3l9otp.c"
 
 echo "== host compatibility patches for old MTK build tools =="
 python3 -m lib2to3 -w -n "$KERNEL/tools/dct" > "$OUT/dct_2to3.log" 2>&1
