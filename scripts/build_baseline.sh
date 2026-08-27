@@ -70,21 +70,27 @@ for p in root.rglob('*.py'):
     if 'cmp(' in s and 'def cmp(' not in s:
         p.write_text(compat + s, errors='surrogateescape')
 
-# Python 2 exposed atoi/atol/atof from string. DCT imports the same module
-# object from many files, so patching it in the entrypoint restores that API.
+# Restore Python-2 library behavior expected by MTK's DCT entrypoint before
+# it imports the rest of the generator modules.
 p = root / 'DrvGen.py'
 s = p.read_text(errors='surrogateescape')
-string_compat = (
+py2_compat = (
     "import string as _py2_string\n"
     "if not hasattr(_py2_string, 'atoi'):\n"
     "    _py2_string.atoi = lambda s, base=10: int(s, base)\n"
     "if not hasattr(_py2_string, 'atol'):\n"
     "    _py2_string.atol = lambda s, base=10: int(s, base)\n"
     "if not hasattr(_py2_string, 'atof'):\n"
-    "    _py2_string.atof = float\n\n"
+    "    _py2_string.atof = float\n"
+    "import configparser as _py2_configparser\n"
+    "_py2_ConfigParser = _py2_configparser.ConfigParser\n"
+    "def _compat_ConfigParser(*args, **kwargs):\n"
+    "    kwargs.setdefault('strict', False)\n"
+    "    return _py2_ConfigParser(*args, **kwargs)\n"
+    "_py2_configparser.ConfigParser = _compat_ConfigParser\n\n"
 )
-if '_py2_string.atoi' not in s:
-    p.write_text(string_compat + s, errors='surrogateescape')
+if '_compat_ConfigParser' not in s:
+    p.write_text(py2_compat + s, errors='surrogateescape')
 
 # 2to3 wraps dict.items() with list(). EintData already uses a local variable
 # named 'list', which makes that generated call an UnboundLocalError.
