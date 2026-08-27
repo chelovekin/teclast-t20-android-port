@@ -15,6 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -24,5 +25,34 @@ jobs:
     steps:
       - name: Checkout port project
         uses: actions/checkout@v4
+
       - name: Run boot repacker regression tests
         run: python3 scripts/test_repack_stock_boot.py
+
+      - name: Verify baseline artifact lookup and download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="$({
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/kernel-baseline.yml/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id'
+          })"
+          test -n "$run_id" && test "$run_id" != null
+
+          artifact_id="$({
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.name | startswith("T20-kernel-baseline-")) | .id' | head -n1
+          })"
+          test -n "$artifact_id"
+
+          mkdir -p baseline-smoke
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > baseline-smoke.zip
+          unzip -q baseline-smoke.zip -d baseline-smoke
+          test -s baseline-smoke/Image.gz-dtb
+          test -s baseline-smoke/odmdtbo.img
+          file baseline-smoke/Image.gz-dtb baseline-smoke/odmdtbo.img
+          sha256sum baseline-smoke/Image.gz-dtb baseline-smoke/odmdtbo.img
