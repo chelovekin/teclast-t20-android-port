@@ -42,11 +42,49 @@ jobs:
       - name: Convert Android 16 image for T20 legacy system partition
         run: |
           set -euxo pipefail
-          git clone --depth=1 https://github.com/AndyCGYan/sas-creator.git
-          sudo bash sas-creator/run.sh 64 "$GITHUB_WORKSPACE/android16-sar.img"
-          mkdir -p out
-          sudo mv sas-creator/s.img out/system-android16-t20.img
-          sudo chown "$USER:$USER" out/system-android16-t20.img
+          mkdir -p out mnt
+
+          # Convert Android sparse image to a normal ext4 image when needed.
+          if simg2img android16-sar.img work.img 2>/dev/null; then
+            :
+          else
+            cp --reflink=auto android16-sar.img work.img
+          fi
+
+          file work.img | tee out/SOURCE_IMAGE_TYPE.txt
+          sudo e2fsck -fy work.img
+
+          # Android build images can use EXT4 shared blocks. Give the filesystem
+          # temporary room, unshare them, then shrink it again after conversion.
+          min_work_bytes=$((6 * 1024 * 1024 * 1024))
+          current_bytes=$(stat -c %s work.img)
+          if [ "$current_bytes" -lt "$min_work_bytes" ]; then
+            truncate -s "$min_work_bytes" work.img
+            sudo resize2fs work.img
+          fi
+          sudo e2fsck -E unshare_blocks -fy work.img
+
+          sudo mount -o loop,rw work.img mnt
+          trap 'sudo umount mnt 2>/dev/null || true' EXIT
+
+          test -d mnt/system
+          test -f mnt/system/build.prop
+
+          # T20 stock boot mounts system.img at /system.  A/B GSIs contain a
+          # nested /system directory because they are system-as-root.  Convert
+          # only that filesystem layout here; do not apply the obsolete
+          # Android-11-specific sas-creator APEX/VNDK rewrites.
+          sudo find mnt -mindepth 1 -maxdepth 1 ! -name system -exec rm -rf -- {} +
+          sudo find mnt/system -mindepth 1 -maxdepth 1 -exec mv -t mnt -- {} +
+          sudo rmdir mnt/system
+          sync
+          sudo umount mnt
+          trap - EXIT
+
+          sudo e2fsck -fy work.img
+          sudo resize2fs -M work.img
+          sudo e2fsck -fy work.img
+          mv work.img out/system-android16-t20.img
 
       - name: Validate converted image offline
         run: |
@@ -54,7 +92,7 @@ jobs:
           img=out/system-android16-t20.img
           test -s "$img"
           file "$img" | tee out/IMAGE_TYPE.txt
-          e2fsck -fn "$img" | tee out/FSCK.txt || test ${PIPESTATUS[0]} -le 1
+          sudo e2fsck -fn "$img" | tee out/FSCK.txt || test ${PIPESTATUS[0]} -le 1
           bytes=$(stat -c %s "$img")
           echo "image_bytes=$bytes" | tee out/REPORT.txt
           echo "system_partition_bytes=$SYSTEM_PARTITION_SIZE" | tee -a out/REPORT.txt
@@ -62,19 +100,22 @@ jobs:
             echo "ERROR: image does not fit T20 system partition" | tee -a out/REPORT.txt
             exit 20
           fi
-          mkdir -p mnt
-          sudo mount -o loop,ro "$img" mnt
-          test -f mnt/build.prop
-          grep -E '^ro.system.build.version.release=|^ro.build.version.release=' mnt/build.prop | tee -a out/REPORT.txt || true
-          test -d mnt/bin
-          test -d mnt/etc
-          test -d mnt/lib64
-          if [ -d mnt/system ]; then
-            echo 'ERROR: image is still system-as-root; T20 needs system-as-system' | tee -a out/REPORT.txt
-            sudo umount mnt
-            exit 21
-          fi
-          sudo umount mnt
+
+          mkdir -p verify
+          sudo mount -o loop,ro "$img" verify
+          trap 'sudo umount verify 2>/dev/null || true' EXIT
+          test -f verify/build.prop
+          test -d verify/bin
+          test -d verify/etc
+          test -d verify/lib64
+          test ! -d verify/system
+          grep -E '^ro\.system\.build\.version\.release=16$|^ro\.build\.version\.release=16$' verify/build.prop | tee -a out/REPORT.txt
+          grep -E '^ro\.system\.build\.version\.sdk=|^ro\.build\.version\.sdk=' verify/build.prop | tee -a out/REPORT.txt || true
+          grep -E '^ro\.product\.cpu\.abi=|^ro\.product\.cpu\.abilist=' verify/build.prop | tee -a out/REPORT.txt || true
+          echo 'layout=legacy-system-as-system' | tee -a out/REPORT.txt
+          echo 'arch=arm64 (lib64 present)' | tee -a out/REPORT.txt
+          sudo umount verify
+          trap - EXIT
           sha256sum "$img" > out/SHA256SUMS
 
       - name: Compress prepared image
