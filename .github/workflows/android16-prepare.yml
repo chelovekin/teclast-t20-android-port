@@ -122,9 +122,9 @@ jobs:
           test -d verify/etc
           test -d verify/lib64
           test ! -d verify/system
-          grep -E '^ro\.system\.build\.version\.release=16$|^ro\.build\.version\.release=16$' verify/build.prop | tee -a out/REPORT.txt
-          grep -E '^ro\.system\.build\.version\.sdk=|^ro\.build\.version\.sdk=' verify/build.prop | tee -a out/REPORT.txt || true
-          grep -E '^ro\.product\.cpu\.abi=|^ro\.product\.cpu\.abilist=' verify/build.prop | tee -a out/REPORT.txt || true
+          sudo grep -E '^ro\.system\.build\.version\.release=16$|^ro\.build\.version\.release=16$' verify/build.prop | tee -a out/REPORT.txt
+          sudo grep -E '^ro\.system\.build\.version\.sdk=|^ro\.build\.version\.sdk=' verify/build.prop | tee -a out/REPORT.txt || true
+          sudo grep -E '^ro\.product\.cpu\.abi=|^ro\.product\.cpu\.abilist=' verify/build.prop | tee -a out/REPORT.txt || true
           echo 'layout=legacy-system-as-system' | tee -a out/REPORT.txt
           echo 'arch=arm64 (lib64 present)' | tee -a out/REPORT.txt
           sudo umount verify
