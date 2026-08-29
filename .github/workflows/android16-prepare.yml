@@ -44,6 +44,19 @@ jobs:
           set -euxo pipefail
           mkdir -p out mnt
 
+          # e2fsck returns 1 when it successfully fixes filesystem errors.
+          # Treat only operational errors (exit codes greater than 1) as fatal.
+          run_e2fsck() {
+            set +e
+            sudo e2fsck "$@"
+            rc=$?
+            set -e
+            if [ "$rc" -gt 1 ]; then
+              return "$rc"
+            fi
+            return 0
+          }
+
           # Convert Android sparse image to a normal ext4 image when needed.
           if simg2img android16-sar.img work.img 2>/dev/null; then
             :
@@ -52,7 +65,7 @@ jobs:
           fi
 
           file work.img | tee out/SOURCE_IMAGE_TYPE.txt
-          sudo e2fsck -fy work.img
+          run_e2fsck -fy work.img
 
           # Android build images can use EXT4 shared blocks. Give the filesystem
           # temporary room, unshare them, then shrink it again after conversion.
@@ -62,7 +75,7 @@ jobs:
             truncate -s "$min_work_bytes" work.img
             sudo resize2fs work.img
           fi
-          sudo e2fsck -E unshare_blocks -fy work.img
+          run_e2fsck -E unshare_blocks -fy work.img
 
           sudo mount -o loop,rw work.img mnt
           trap 'sudo umount mnt 2>/dev/null || true' EXIT
@@ -81,9 +94,9 @@ jobs:
           sudo umount mnt
           trap - EXIT
 
-          sudo e2fsck -fy work.img
+          run_e2fsck -fy work.img
           sudo resize2fs -M work.img
-          sudo e2fsck -fy work.img
+          run_e2fsck -fy work.img
           mv work.img out/system-android16-t20.img
 
       - name: Validate converted image offline
@@ -132,3 +145,4 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
+
